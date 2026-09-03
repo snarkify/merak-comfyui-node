@@ -25,6 +25,9 @@ irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.p
 脚本会先显示找到的 ComfyUI 位置，然后让你输入 merak API key：
 从 [merak 控制台](https://merakcompute.ai) 复制 key 粘贴进去回车即可。装完后重启 ComfyUI。
 
+两个系统的命令不一样，是因为 Windows 上没有 `sh`，PowerShell 也无法执行 shell 语法 ——
+但两个安装脚本做的事情、顺序和参数完全一致。
+
 还没有 ComfyUI？请先看 [安装 ComfyUI](#安装-comfyui)，装好后再回到这里。
 
 再运行一次这行命令就是升级；旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
@@ -50,9 +53,33 @@ Windows：
 | `--path` / `-ComfyPath` | 指定 ComfyUI 文件夹，用于自动查找失败时 |
 | `--lang en\|zh` / `-Lang` | 提示语言，默认跟随系统 |
 | `--yes` / `-Yes` | 全程不提问 —— 缺信息时直接报错退出 |
+| `--no-scan` / `-NoScan` | 只用记录路径和默认路径，不搜索磁盘 |
+| `--detect-only` / `-DetectOnly` | 只列出找到的所有 ComfyUI 文件夹，然后退出 |
 
 安装脚本只会写两个地方：它报告的那个 ComfyUI 文件夹下的
 `custom_nodes/merak-comfyui-node`，以及 key 文件 `~/.merak/api_key`。
+
+### 它是怎么找到 ComfyUI 的
+
+ComfyUI 在不同系统上的安装位置并不统一，但每个安装的内部结构是一样的：
+`<base>/custom_nodes` 和 `main.py` 在同一层；而且安装它的那些工具都会把路径记录下来。
+所以脚本按“便宜且精确”的顺序依次查找，只有全都落空时才去扫描磁盘：
+
+1. `--path`，或环境变量 `COMFYUI_PATH`
+2. 桌面版应用自己的记录 —— `installations.json`（它创建过的每个安装），
+   旧版本则是 `config.json` 和 `extra_models_config.yaml`
+3. `comfy-cli` 的 `config.ini`，里面记着它的 workspace
+4. 当前正在运行的 ComfyUI 进程
+5. 各种默认位置 —— `ComfyUI-Installs`、`Documents/ComfyUI`、Windows 便携版、`/opt` 等
+6. 系统文件索引：macOS 用 Spotlight，Linux 用 `plocate` —— 都是瞬间返回
+7. 限定深度地遍历用户目录和磁盘根目录，跳过 `node_modules`、`site-packages` 之类的目录
+
+第 1–6 步基本是瞬间完成的。第 7 步在 macOS 和 Linux 上需要几秒；
+Windows 没有可查询的文件索引，可能要花上一分钟，用 `-NoScan` 可以跳过。
+
+只有当 `custom_nodes` 旁边还有 `main.py`、`comfyui_version.py` 或 `comfy/` 时，
+才算是一个确定的 ComfyUI 安装；其它的会标上 `(?)` 并额外确认一次。
+找到多个时脚本会让你选。想只看结果、不做安装，加 `--detect-only` / `-DetectOnly`。
 
 ## 手动安装
 
@@ -139,7 +166,8 @@ python main.py
 
 | | |
 |---|---|
-| 安装脚本提示找不到 ComfyUI | 用 `--path` / `-ComfyPath` 指定 ComfyUI 文件夹 |
+| 安装脚本提示找不到 ComfyUI | 先用 `--detect-only` / `-DetectOnly` 看看它找到了什么，再用 `--path` / `-ComfyPath` 指定 ComfyUI 文件夹 |
+| 装到了错误的那个 ComfyUI | 用 `--path` / `-ComfyPath` 指定，节点会装到你指定的位置 |
 | 重启后搜不到 **Merak** 节点 | 确认节点在 `ComfyUI/custom_nodes/merak-comfyui-node` 下，并查看 ComfyUI 控制台里的报错 |
 | `403 INFERENCE_NOT_ENABLED` | 你的账号没有开通推理权限 |
 | `403` / `404` 且提到 team | 你必须是该 team 的**所有者**，仅是成员不够 |

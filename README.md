@@ -28,6 +28,10 @@ It prints where it found ComfyUI, then asks for your merak API key: paste the ke
 the [merak console](https://merakcompute.ai) and press Enter. Restart ComfyUI when it
 finishes.
 
+The two lines differ because Windows has no `sh` and PowerShell cannot run shell
+syntax — the installers themselves do the same thing, in the same order, with the same
+options.
+
 No ComfyUI yet? [Install ComfyUI](#install-comfyui) first, then come back.
 
 Running the line again upgrades an existing install; the old copy is kept next to it as
@@ -54,9 +58,37 @@ Windows:
 | `--path` / `-ComfyPath` | your ComfyUI folder, when the search misses it |
 | `--lang en\|zh` / `-Lang` | message language; the default follows your system |
 | `--yes` / `-Yes` | never ask anything — stop with an error instead |
+| `--no-scan` / `-NoScan` | use only recorded and default paths, never search the disk |
+| `--detect-only` / `-DetectOnly` | list every ComfyUI folder found, then stop |
 
 The installer only ever writes to two places: `custom_nodes/merak-comfyui-node` inside
 the ComfyUI folder it reports, and the key file `~/.merak/api_key`.
+
+### How it finds ComfyUI
+
+ComfyUI does not sit in one place across systems — but every install has the same shape
+inside, `<base>/custom_nodes` next to `main.py`, and the apps that install it write down
+where they put it. So the search asks the cheap, exact sources first and only walks the
+disk if they all come up empty:
+
+1. `--path`, or the `COMFYUI_PATH` environment variable
+2. the desktop app's own records — `installations.json` (every install it made),
+   `config.json` and `extra_models_config.yaml` on older builds
+3. `comfy-cli`'s `config.ini`, which remembers its workspace
+4. a ComfyUI that happens to be running right now
+5. the default locations — `ComfyUI-Installs`, `Documents/ComfyUI`, the Windows portable
+   build, `/opt`, and the rest
+6. the system file index: Spotlight on macOS, `plocate` on Linux — both answer instantly
+7. a depth-limited walk of your home and drive roots, skipping `node_modules`,
+   `site-packages` and friends
+
+Steps 1–6 are effectively instant. Step 7 takes a few seconds on macOS and Linux; on
+Windows, which has no index to ask, it can take up to a minute, and `-NoScan` skips it.
+
+A folder only counts as ComfyUI if `main.py`, `comfyui_version.py` or `comfy/` sits
+beside `custom_nodes`; anything else is offered with a `(?)` and a confirmation. When
+more than one turns up, the installer asks which. Run it with `--detect-only` /
+`-DetectOnly` to see the list without installing anything.
 
 ## Install by hand
 
@@ -149,7 +181,8 @@ it back (`0` is a real seed).
 
 | | |
 |---|---|
-| The installer says ComfyUI was not found | pass `--path` / `-ComfyPath` with your ComfyUI folder |
+| The installer says ComfyUI was not found | run it with `--detect-only` / `-DetectOnly` to see what it looked at, then pass `--path` / `-ComfyPath` with your ComfyUI folder |
+| It picked the wrong ComfyUI | pass `--path` / `-ComfyPath`; the node goes wherever you point it |
 | No **Merak** nodes after restarting | check the node landed in `ComfyUI/custom_nodes/merak-comfyui-node`, and look at the ComfyUI console for the error |
 | `403 INFERENCE_NOT_ENABLED` | inference is not enabled for your account |
 | `403` / `404` naming the team | you must **own** the team; membership is not enough |
