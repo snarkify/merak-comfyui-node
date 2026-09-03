@@ -17,12 +17,15 @@ you should get *Merak Generate Video* and *Merak Fetch Video (by id)*.
 ## Set your key
 
 ```bash
-export MERAK_API_KEY=...
-export MERAK_TEAM_ID=...   # from the merak console URL
+mkdir -p ~/.merak
+printf '%s\n' "YOUR_KEY" > ~/.merak/api_key
+chmod 600 ~/.merak/api_key
 ```
 
-Or write the key to `~/.merak/api_key` (`chmod 600`), which a ComfyUI started from the
-Dock will find — it does not read your shell profile.
+A ComfyUI started from the Dock does not read your shell profile, so the file is the
+reliable route. Launching from a terminal, `MERAK_API_KEY` works too.
+
+`team_id` goes on the node, or in `MERAK_TEAM_ID` — find it in the merak console URL.
 
 ## Use
 
