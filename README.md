@@ -1,20 +1,71 @@
 # Merak Video for ComfyUI
 
-Generate video with **MiniMax-H3** on [merak](https://merakcompute.ai), from inside
-ComfyUI. Text-to-video and image-to-video, rendered on merak's GPUs and saved to your
-output folder. No dependencies.
+**English** · [中文](README.zh-CN.md)
 
-## Install
+Generate video with **MiniMax-H3** on [merak](https://merakcompute.ai), from inside
+ComfyUI. Text-to-video and image-to-video. The render runs on merak's GPUs, so your own
+machine only has to run ComfyUI — no local GPU needed for this node, and nothing to
+install beyond it.
+
+## Install in one line
+
+Already have ComfyUI? Copy the line for your system into a terminal and press Enter. It
+finds your ComfyUI folder, installs the node into it, and saves your API key.
+
+**macOS / Linux** — open **Terminal** (on a Mac: press `⌘ Space`, type `Terminal`, Enter):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh | sh
+```
+
+**Windows** — open **PowerShell** (press the Windows key, type `PowerShell`, Enter):
+
+```powershell
+irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1 | iex
+```
+
+It prints where it found ComfyUI, then asks for your merak API key: paste the key from
+the [merak console](https://merakcompute.ai) and press Enter. Restart ComfyUI when it
+finishes.
+
+No ComfyUI yet? [Install ComfyUI](#install-comfyui) first, then come back.
+
+Running the line again upgrades an existing install; the old copy is kept next to it as
+`merak-comfyui-node.previous`.
+
+### If it can't find ComfyUI, or you want to answer nothing
+
+Pass the answers on the command line. macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh \
+  | sh -s -- --key "YOUR_KEY" --path "/path/to/ComfyUI"
+```
+
+Windows:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1))) -ApiKey "YOUR_KEY" -ComfyPath "C:\path\to\ComfyUI"
+```
+
+| Option | |
+|---|---|
+| `--key` / `-ApiKey` | the API key, instead of being asked for it |
+| `--path` / `-ComfyPath` | your ComfyUI folder, when the search misses it |
+| `--lang en\|zh` / `-Lang` | message language; the default follows your system |
+| `--yes` / `-Yes` | never ask anything — stop with an error instead |
+
+The installer only ever writes to two places: `custom_nodes/merak-comfyui-node` inside
+the ComfyUI folder it reports, and the key file `~/.merak/api_key`.
+
+## Install by hand
 
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/snarkify/merak-comfyui-node.git
 ```
 
-Restart ComfyUI. Needs Python 3.10 or newer. To check it loaded, double-click the canvas and search for **Merak** —
-you should get *Merak Generate Video* and *Merak Fetch Video (by id)*.
-
-## Set your key
+Then save your key:
 
 ```bash
 mkdir -p ~/.merak
@@ -22,10 +73,46 @@ printf '%s\n' "YOUR_KEY" > ~/.merak/api_key
 chmod 600 ~/.merak/api_key
 ```
 
-A ComfyUI started from the Dock does not read your shell profile, so the file is the
-reliable route. Launching from a terminal, `MERAK_API_KEY` works too.
+On Windows that file is `C:\Users\<you>\.merak\api_key` — plain text, UTF-8, the key on
+one line.
+
+Restart ComfyUI. Needs Python 3.10 or newer. To check it loaded, double-click the canvas
+and search for **Merak** — you should get *Merak Generate Video* and *Merak Fetch Video
+(by id)*.
+
+A ComfyUI started from the Dock or the Start menu does not read your shell profile, so
+the key file is the reliable route. Launching from a terminal, `MERAK_API_KEY` works too.
 
 `team_id` goes on the node, or in `MERAK_TEAM_ID` — find it in the merak console URL.
+
+## Install ComfyUI
+
+Skip this if you already run ComfyUI.
+
+**Windows or macOS, easiest — the desktop app.** Download the installer from
+[comfy.org/download](https://www.comfy.org/download), open it, and follow the prompts. It
+puts your ComfyUI folder in `Documents/ComfyUI`, which the one-line installer above finds
+on its own.
+
+**Windows, portable build.** Download `ComfyUI_windows_portable_nvidia.7z` from the
+[releases page](https://github.com/comfyanonymous/ComfyUI/releases), extract it (with
+[7-Zip](https://www.7-zip.org/)) to somewhere like `C:\`, and start it with
+`run_nvidia_gpu.bat` — or `run_cpu.bat` if you have no NVIDIA card. Merak renders on
+merak's GPUs either way.
+
+**macOS, Linux, or from source.** Needs Python 3.10+ and git:
+
+```bash
+git clone https://github.com/comfyanonymous/ComfyUI.git
+cd ComfyUI
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+Then open <http://127.0.0.1:8188> in a browser. On Linux, install the PyTorch build for
+your GPU first — see [ComfyUI's
+README](https://github.com/comfyanonymous/ComfyUI#installing).
 
 ## Use
 
@@ -62,9 +149,11 @@ it back (`0` is a real seed).
 
 | | |
 |---|---|
+| The installer says ComfyUI was not found | pass `--path` / `-ComfyPath` with your ComfyUI folder |
+| No **Merak** nodes after restarting | check the node landed in `ComfyUI/custom_nodes/merak-comfyui-node`, and look at the ComfyUI console for the error |
 | `403 INFERENCE_NOT_ENABLED` | inference is not enabled for your account |
 | `403` / `404` naming the team | you must **own** the team; membership is not enough |
-| `401` | key missing or revoked |
+| `401` | key missing or revoked — check `~/.merak/api_key` holds the key and nothing else |
 | Render `FAILED` with `input image …` | keyframe outside the size or aspect limits — no charge |
 | Poll times out | the render is **not** cancelled — re-attach with *Merak Fetch Video* |
 
