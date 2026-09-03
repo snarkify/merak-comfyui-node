@@ -7,50 +7,88 @@ ComfyUI. Text-to-video and image-to-video. The render runs on merak's GPUs, so y
 machine only has to run ComfyUI — no local GPU needed for this node, and nothing to
 install beyond it.
 
-## Install in one line
+## Before you begin
 
-Already have ComfyUI? Copy the line for your system into a terminal and press Enter. It
-finds your ComfyUI folder, installs the node into it, and saves your API key.
+Make sure you have:
 
-**macOS / Linux** — open **Terminal** (on a Mac: press `⌘ Space`, type `Terminal`, Enter):
+* **ComfyUI installed** — no ComfyUI yet? [Install ComfyUI](#install-comfyui) first, it
+  takes a few minutes
+* **A merak API key** — from the [merak console](https://merakcompute.ai)
+* **A terminal open** — Terminal on macOS (press `⌘ Space`, type `Terminal`, Enter);
+  PowerShell or Command Prompt on Windows (press the Windows key and type the name)
+
+You do not need a GPU. Renders run on merak's GPUs; your machine only runs ComfyUI.
+
+## Step 1: Install the node
+
+Copy the line for your system, paste it into the terminal, and press Enter.
+
+**macOS, Linux, WSL:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh | sh
 ```
 
-**Windows** — open **PowerShell** (press the Windows key, type `PowerShell`, Enter):
+**Windows PowerShell:**
 
 ```powershell
 irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1 | iex
 ```
 
-It prints where it found ComfyUI, then asks for your merak API key: paste the key from
-the [merak console](https://merakcompute.ai) and press Enter. Restart ComfyUI when it
-finishes.
+**Windows CMD:**
 
-The two lines differ because Windows has no `sh` and PowerShell cannot run shell
-syntax — the installers themselves do the same thing, in the same order, with the same
-options.
+```batch
+curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
 
-No ComfyUI yet? [Install ComfyUI](#install-comfyui) first, then come back.
+If you see `The token '&&' is not a valid statement separator`, you're in PowerShell, not
+CMD. If you see `'irm' is not recognized as an internal or external command`, you're in
+CMD, not PowerShell. Your prompt shows `PS C:\` when you're in PowerShell and `C:\`
+without the `PS` when you're in CMD.
 
-Running the line again upgrades an existing install; the old copy is kept next to it as
+The installer prints the ComfyUI folder it found and installs into it. Running the line
+again upgrades an existing install; the old copy is kept beside it as
 `merak-comfyui-node.previous`.
 
-### If it can't find ComfyUI, or you want to answer nothing
+## Step 2: Paste your API key
 
-Pass the answers on the command line. macOS / Linux:
+The installer asks for it. Copy the key from the [merak console](https://merakcompute.ai),
+paste it, and press Enter.
+
+It goes into `~/.merak/api_key` — `C:\Users\<you>\.merak\api_key` on Windows — readable
+only by you. If a key is already saved there, the installer keeps it and doesn't ask.
+
+## Step 3: Check it loaded
+
+Restart ComfyUI, double-click the canvas, and type `Merak`. You should get:
+
+* **Merak Generate Video**
+* **Merak Fetch Video (by id)**
+
+If nothing comes up, see [Troubleshooting](#troubleshooting).
+
+## Step 4: Make your first video
+
+Drag `examples/merak-video.json` onto the canvas for a ready-made graph, or add
+**video/merak → Merak Generate Video** yourself, type a prompt, and queue it. The clip
+lands in your output folder and previews in the node. [Use](#use) has the rest.
+
+## Options
+
+Pass the answers on the command line to skip the questions. macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh \
   | sh -s -- --key "YOUR_KEY" --path "/path/to/ComfyUI"
 ```
 
-Windows:
+Windows PowerShell:
 
 ```powershell
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1))) -ApiKey "YOUR_KEY" -ComfyPath "C:\path\to\ComfyUI"
 ```
+
+Windows CMD takes the same options as PowerShell: `install.cmd -ApiKey "YOUR_KEY"`.
 
 | Option | |
 |---|---|
@@ -62,7 +100,10 @@ Windows:
 | `--detect-only` / `-DetectOnly` | list every ComfyUI folder found, then stop |
 
 The installer only ever writes to two places: `custom_nodes/merak-comfyui-node` inside
-the ComfyUI folder it reports, and the key file `~/.merak/api_key`.
+the ComfyUI folder it reports, and the key file `~/.merak/api_key`. There are three
+scripts because no one language runs on all three systems — Windows has no `sh`, macOS
+has no PowerShell — but they do the same thing, in the same order, with the same
+options, and `tests/detect_test.sh` checks that they agree.
 
 ### How it finds ComfyUI
 
@@ -82,8 +123,9 @@ disk if they all come up empty:
 7. a depth-limited walk of your home and drive roots, skipping `node_modules`,
    `site-packages` and friends
 
-Steps 1–6 are effectively instant. Step 7 takes a few seconds on macOS and Linux; on
-Windows, which has no index to ask, it can take up to a minute, and `-NoScan` skips it.
+The first six sources are effectively instant. Only the last one walks anything: a few
+seconds on macOS and Linux, up to a minute on Windows, which has no index to ask.
+`--no-scan` / `-NoScan` skips it.
 
 A folder only counts as ComfyUI if `main.py`, `comfyui_version.py` or `comfy/` sits
 beside `custom_nodes`; anything else is offered with a `(?)` and a confirmation. When

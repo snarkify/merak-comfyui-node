@@ -3,7 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh | sh
 #
-# Windows has the same installer as install.ps1 - the two are kept in step.
+# Windows has the same installer as install.ps1, and install.cmd for the Command
+# Prompt - all three are kept in step by tests/detect_test.sh.
 #
 # Options (pass them after `| sh -s --`):
 #   --key <API_KEY>   use this key instead of asking for one

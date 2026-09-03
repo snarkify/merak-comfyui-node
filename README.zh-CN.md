@@ -5,47 +5,85 @@
 在 ComfyUI 里用 [merak](https://merakcompute.ai) 上的 **MiniMax-H3** 生成视频，支持文生视频和图生视频。
 渲染在 merak 的 GPU 上完成，你的电脑只需要能跑起 ComfyUI —— 这个节点不需要本地显卡，也不需要额外装任何依赖。
 
-## 一行命令安装
+## 开始之前
 
-已经装好 ComfyUI 了？把下面对应你系统的那一行复制到终端里回车即可。
-它会自动找到 ComfyUI 文件夹，把节点装进去，并保存你的 API key。
+请先准备好：
 
-**macOS / Linux** —— 打开**终端**（Mac 上按 `⌘ 空格`，输入 `Terminal` 回车）：
+* **装好的 ComfyUI** —— 还没有？先看 [安装 ComfyUI](#安装-comfyui)，几分钟就能装好
+* **一个 merak API key** —— 在 [merak 控制台](https://merakcompute.ai) 获取
+* **一个打开的终端** —— macOS 上按 `⌘ 空格` 输入 `Terminal` 回车；
+  Windows 上按 Windows 键，输入 `PowerShell` 或 `命令提示符`
+
+不需要显卡。渲染都在 merak 的 GPU 上完成，你的电脑只负责跑 ComfyUI。
+
+## 第 1 步：安装节点
+
+复制对应你系统的那一行，粘贴到终端里回车。
+
+**macOS、Linux、WSL：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh | sh
 ```
 
-**Windows** —— 打开 **PowerShell**（按 Windows 键，输入 `PowerShell` 回车）：
+**Windows PowerShell：**
 
 ```powershell
 irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1 | iex
 ```
 
-脚本会先显示找到的 ComfyUI 位置，然后让你输入 merak API key：
-从 [merak 控制台](https://merakcompute.ai) 复制 key 粘贴进去回车即可。装完后重启 ComfyUI。
+**Windows CMD（命令提示符）：**
 
-两个系统的命令不一样，是因为 Windows 上没有 `sh`，PowerShell 也无法执行 shell 语法 ——
-但两个安装脚本做的事情、顺序和参数完全一致。
+```batch
+curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
 
-还没有 ComfyUI？请先看 [安装 ComfyUI](#安装-comfyui)，装好后再回到这里。
+如果报错 `The token '&&' is not a valid statement separator`，说明你在 PowerShell 里，
+而不是 CMD；如果报错 `'irm' is not recognized as an internal or external command`，
+说明你在 CMD 里，而不是 PowerShell。看提示符就能区分：PowerShell 显示 `PS C:\`，
+CMD 只显示 `C:\`。
 
-再运行一次这行命令就是升级；旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
+脚本会打印它找到的 ComfyUI 文件夹，并安装到那里。再运行一次就是升级，
+旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
 
-### 如果没找到 ComfyUI，或者你不想被提问
+## 第 2 步：粘贴 API key
 
-把答案直接写在命令里。macOS / Linux：
+脚本会主动询问。从 [merak 控制台](https://merakcompute.ai) 复制 key，粘贴进去回车即可。
+
+key 会写入 `~/.merak/api_key`（Windows 上是 `C:\Users\<你的用户名>\.merak\api_key`），
+只有你自己可读。如果那里已经存了 key，脚本会保留它，也不会再问。
+
+## 第 3 步：确认加载成功
+
+重启 ComfyUI，双击画布，输入 `Merak`。应该能看到：
+
+* **Merak Generate Video**
+* **Merak Fetch Video (by id)**
+
+如果搜不到，见 [常见问题](#常见问题)。
+
+## 第 4 步：生成第一个视频
+
+把 `examples/merak-video.json` 拖到画布上就有一个现成的工作流；
+或者自己添加 **video/merak → Merak Generate Video**，写好 prompt，排队执行。
+视频会保存到输出目录，并在节点上直接预览。更多用法见 [使用](#使用)。
+
+## 参数
+
+把答案直接写在命令里，就不会有任何提问。macOS / Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh \
   | sh -s -- --key "你的KEY" --path "/path/to/ComfyUI"
 ```
 
-Windows：
+Windows PowerShell：
 
 ```powershell
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1))) -ApiKey "你的KEY" -ComfyPath "C:\path\to\ComfyUI"
 ```
+
+Windows CMD 的参数和 PowerShell 一样：`install.cmd -ApiKey "你的KEY"`。
 
 | 参数 | 说明 |
 |---|---|
@@ -58,6 +96,9 @@ Windows：
 
 安装脚本只会写两个地方：它报告的那个 ComfyUI 文件夹下的
 `custom_nodes/merak-comfyui-node`，以及 key 文件 `~/.merak/api_key`。
+之所以有三个脚本，是因为没有哪一种语言能同时跑在三个系统上 —— Windows 上没有 `sh`，
+macOS 上没有 PowerShell —— 但它们做的事情、顺序和参数完全一致，
+`tests/detect_test.sh` 会检查它们的结果是否一致。
 
 ### 它是怎么找到 ComfyUI 的
 
@@ -74,8 +115,9 @@ ComfyUI 在不同系统上的安装位置并不统一，但每个安装的内部
 6. 系统文件索引：macOS 用 Spotlight，Linux 用 `plocate` —— 都是瞬间返回
 7. 限定深度地遍历用户目录和磁盘根目录，跳过 `node_modules`、`site-packages` 之类的目录
 
-第 1–6 步基本是瞬间完成的。第 7 步在 macOS 和 Linux 上需要几秒；
-Windows 没有可查询的文件索引，可能要花上一分钟，用 `-NoScan` 可以跳过。
+前六种来源基本都是瞬间完成的，只有最后一种要真正遍历目录：
+macOS 和 Linux 上需要几秒，Windows 没有可查询的文件索引，可能要花上一分钟。
+用 `--no-scan` / `-NoScan` 可以跳过它。
 
 只有当 `custom_nodes` 旁边还有 `main.py`、`comfyui_version.py` 或 `comfy/` 时，
 才算是一个确定的 ComfyUI 安装；其它的会标上 `(?)` 并额外确认一次。

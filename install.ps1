@@ -2,7 +2,9 @@
 #
 #   irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1 | iex
 #
-# macOS and Linux have the same installer as install.sh - the two are kept in step.
+# From the Command Prompt, install.cmd fetches this file and runs it.
+# macOS and Linux have the same installer as install.sh - all three are kept in
+# step by tests/detect_test.sh.
 #
 # With options:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1))) -ApiKey "YOUR_KEY"
