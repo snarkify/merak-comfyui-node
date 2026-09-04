@@ -106,3 +106,4 @@ if ($Failures -gt 0) {
     exit 1
 }
 Write-Host "$Checks checks passed"
+exit 0
