@@ -71,26 +71,26 @@ try {
     Copy-Item (Join-Path $Repo "__init__.py") $source
     Compress-Archive -Path $source -DestinationPath $Archive
 
-    $home = Join-Path $Work "explicit-home"
+    $testHome = Join-Path $Work "explicit-home"
     $root = Join-Path $Work "explicit\ComfyUI"
-    New-Item -ItemType Directory -Path $home -Force | Out-Null
+    New-Item -ItemType Directory -Path $testHome -Force | Out-Null
     Comfy $root
-    $result = Run-Installer $home @("-ComfyPath", $root, "-ApiKey", "test-key", "-Yes")
+    $result = Run-Installer $testHome @("-ComfyPath", $root, "-ApiKey", "test-key", "-Yes")
     $installed = Test-Path (Join-Path $root "custom_nodes\merak-comfyui-node\merak_nodes.py")
-    $keyFile = Join-Path $home ".merak\api_key"
+    $keyFile = Join-Path $testHome ".merak\api_key"
     $keySaved = (Test-Path $keyFile) -and ((Get-Content $keyFile -Raw).Trim() -eq "test-key")
     Check "explicit path installs the node and key" ($result.Code -eq 0 -and $installed -and $keySaved)
 
-    $home = Join-Path $Work "multiple-home"
-    Comfy (Join-Path $home "ComfyUI")
-    Comfy (Join-Path $home "Documents\ComfyUI")
-    $result = Run-Installer $home @("-Yes")
-    $nothingInstalled = -not (Get-ChildItem $home -Recurse -Directory -Filter "merak-comfyui-node" -ErrorAction SilentlyContinue)
+    $testHome = Join-Path $Work "multiple-home"
+    Comfy (Join-Path $testHome "ComfyUI")
+    Comfy (Join-Path $testHome "Documents\ComfyUI")
+    $result = Run-Installer $testHome @("-Yes")
+    $nothingInstalled = -not (Get-ChildItem $testHome -Recurse -Directory -Filter "merak-comfyui-node" -ErrorAction SilentlyContinue)
     Check "multiple installs require an explicit choice" ($result.Code -ne 0 -and $nothingInstalled)
 
-    $home = Join-Path $Work "invalid-home"
-    New-Item -ItemType Directory -Path $home -Force | Out-Null
-    $result = Run-Installer $home @("-ComfyPath", (Join-Path $home "missing"), "-Yes")
+    $testHome = Join-Path $Work "invalid-home"
+    New-Item -ItemType Directory -Path $testHome -Force | Out-Null
+    $result = Run-Installer $testHome @("-ComfyPath", (Join-Path $testHome "missing"), "-Yes")
     Check "invalid path is rejected" ($result.Code -ne 0)
 }
 finally {
