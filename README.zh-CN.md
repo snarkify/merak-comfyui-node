@@ -20,7 +20,7 @@
 
 复制对应你系统的那一行，粘贴到终端里回车。
 
-**macOS、Linux、WSL：**
+**macOS、Linux：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.sh | sh
@@ -43,8 +43,11 @@ curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/in
 说明你在 CMD 里，而不是 PowerShell。看提示符就能区分：PowerShell 显示 `PS C:\`，
 CMD 只显示 `C:\`。
 
-脚本会打印它找到的 ComfyUI 文件夹，并安装到那里。再运行一次就是升级，
+脚本本身的提示是英文的（这份文档是中文的）。它会打印找到的 ComfyUI 文件夹，并安装到那里。再运行一次就是升级，
 旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
+
+在 WSL 里，如果 ComfyUI 装在 Windows 上，请使用 Windows 安装脚本；只有 ComfyUI
+本身也装在 WSL 里时，才使用 shell 安装脚本。
 
 ## 第 2 步：粘贴 API key
 
@@ -83,85 +86,33 @@ Windows PowerShell：
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.ps1))) -ApiKey "你的KEY" -ComfyPath "C:\path\to\ComfyUI"
 ```
 
-Windows CMD 的参数和 PowerShell 一样：`install.cmd -ApiKey "你的KEY"`。
+Windows CMD 的参数和 PowerShell 一样，但第 1 步那一行在结束时会把 `install.cmd` 删掉，
+所以要把参数写在同一行里：
+
+```batch
+curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/install.cmd -o install.cmd && install.cmd -ApiKey "你的KEY" && del install.cmd
+```
 
 | 参数 | 说明 |
 |---|---|
 | `--key` / `-ApiKey` | 直接给出 API key，不再提问 |
 | `--path` / `-ComfyPath` | 指定 ComfyUI 文件夹，用于自动查找失败时 |
-| `--lang en\|zh` / `-Lang` | 提示语言，默认跟随系统 |
-| `--yes` / `-Yes` | 全程不提问 —— 缺信息时直接报错退出 |
-| `--no-scan` / `-NoScan` | 只用记录路径和默认路径，不搜索磁盘 |
-| `--detect-only` / `-DetectOnly` | 只列出找到的所有 ComfyUI 文件夹，然后退出 |
-
-安装脚本只会写两个地方：它报告的那个 ComfyUI 文件夹下的
-`custom_nodes/merak-comfyui-node`，以及 key 文件 `~/.merak/api_key`。
-之所以有三个脚本，是因为没有哪一种语言能同时跑在三个系统上 —— Windows 上没有 `sh`，
-macOS 上没有 PowerShell —— 但它们做的事情、顺序和参数完全一致，
-`tests/detect_test.sh` 会检查它们的结果是否一致。
-
-### 它是怎么找到 ComfyUI 的
-
-ComfyUI 在不同系统上的安装位置并不统一，但每个安装的内部结构是一样的：
-`<base>/custom_nodes` 和 `main.py` 在同一层；而且安装它的那些工具都会把路径记录下来。
-所以脚本按“便宜且精确”的顺序依次查找，只有全都落空时才去扫描磁盘：
-
-1. `--path`，或环境变量 `COMFYUI_PATH`
-2. 桌面版应用自己的记录 —— `installations.json`（它创建过的每个安装），
-   旧版本则是 `config.json` 和 `extra_models_config.yaml`
-3. `comfy-cli` 的 `config.ini`，里面记着它的 workspace
-4. 当前正在运行的 ComfyUI 进程
-5. 各种默认位置 —— `ComfyUI-Installs`、`Documents/ComfyUI`、Windows 便携版、`/opt` 等
-6. 系统文件索引：macOS 用 Spotlight，Linux 用 `plocate` —— 都是瞬间返回
-7. 限定深度地遍历用户目录和磁盘根目录，跳过 `node_modules`、`site-packages` 之类的目录
-
-前六种来源基本都是瞬间完成的，只有最后一种要真正遍历目录：
-macOS 和 Linux 上需要几秒，Windows 没有可查询的文件索引，可能要花上一分钟。
-用 `--no-scan` / `-NoScan` 可以跳过它。
-
-只有当 `custom_nodes` 旁边还有 `main.py`、`comfyui_version.py` 或 `comfy/` 时，
-才算是一个确定的 ComfyUI 安装；其它的会标上 `(?)` 并额外确认一次。
-找到多个时脚本会让你选。想只看结果、不做安装，加 `--detect-only` / `-DetectOnly`。
-
-## 手动安装
-
-```bash
-cd ComfyUI/custom_nodes
-git clone https://github.com/snarkify/merak-comfyui-node.git
-```
-
-然后保存 key：
-
-```bash
-mkdir -p ~/.merak
-printf '%s\n' "你的KEY" > ~/.merak/api_key
-chmod 600 ~/.merak/api_key
-```
-
-Windows 上这个文件是 `C:\Users\<你的用户名>\.merak\api_key` —— 纯文本、UTF-8、key 单独一行。
-
-之后重启 ComfyUI。需要 Python 3.10 或更高版本。想确认是否加载成功，双击画布搜索 **Merak**，
-应该能看到 *Merak Generate Video* 和 *Merak Fetch Video (by id)*。
-
-从 Dock 或开始菜单启动的 ComfyUI 读不到你的 shell 配置，所以 key 文件是最可靠的方式。
-如果是从终端启动的，用环境变量 `MERAK_API_KEY` 也可以。
-
-`team_id` 可以填在节点上，或放进 `MERAK_TEAM_ID` —— 在 merak 控制台的网址里能找到它。
+| `--yes` / `-Yes` | 全程不提问；路径缺失或不明确时直接报错退出 |
 
 ## 安装 ComfyUI
 
 已经在用 ComfyUI 的可以跳过这一节。
 
-**Windows 或 macOS，最简单 —— 桌面版应用。** 从
-[comfy.org/download](https://www.comfy.org/download) 下载安装包，打开后按提示装完即可。
-它会把 ComfyUI 文件夹放在 `Documents/ComfyUI`，上面的一行命令能自动找到。
+**Windows 或 macOS，最简单的方式是桌面版。** 从
+[comfy.org/download](https://www.comfy.org/download) 下载并按提示安装。
 
-**Windows，便携版。** 从[发布页](https://github.com/comfyanonymous/ComfyUI/releases)下载
+**Windows 便携版。** 从[发布页](https://github.com/comfyanonymous/ComfyUI/releases)下载
 `ComfyUI_windows_portable_nvidia.7z`，用 [7-Zip](https://www.7-zip.org/) 解压到比如 `C:\` 下面，
 然后用 `run_nvidia_gpu.bat` 启动 —— 没有 NVIDIA 显卡就用 `run_cpu.bat`。
 两种方式都不影响 Merak，它的渲染本来就在 merak 的 GPU 上跑。
 
-**macOS、Linux 或从源码装。** 需要 Python 3.10+ 和 git：
+**macOS、Linux 或从源码安装。** 请先查看 ComfyUI 最新的
+[安装说明](https://docs.comfy.org/installation/manual_install)。基本步骤是：
 
 ```bash
 git clone https://github.com/comfyanonymous/ComfyUI.git
@@ -171,14 +122,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
-然后在浏览器打开 <http://127.0.0.1:8188>。Linux 上请先装好对应你显卡的 PyTorch ——
-见 [ComfyUI 的 README](https://github.com/comfyanonymous/ComfyUI#installing)。
+然后在浏览器打开 <http://127.0.0.1:8188>。
 
 ## 使用
 
 添加 **video/merak → Merak Generate Video**，填好 prompt，选一个 clip，然后排队执行。
 视频会保存到输出目录的 `video/merak_00001_.mp4`，并在节点上直接预览。
 改 `filename_prefix` 可以换子目录，或加上 `%date:yyyy-MM-dd%` 这样的占位符。
+
+`team_id` 可以填在节点上，或放进 `MERAK_TEAM_ID` —— 在 merak 控制台的网址里能找到它。
 
 把图片接到 `first_frame`、`last_frame`（或两个都接）就变成图生视频。
 
@@ -208,7 +160,7 @@ python main.py
 
 | | |
 |---|---|
-| 安装脚本提示找不到 ComfyUI | 先用 `--detect-only` / `-DetectOnly` 看看它找到了什么，再用 `--path` / `-ComfyPath` 指定 ComfyUI 文件夹 |
+| 安装脚本提示找不到 ComfyUI | 用 `--path` / `-ComfyPath` 指定 ComfyUI 文件夹 |
 | 装到了错误的那个 ComfyUI | 用 `--path` / `-ComfyPath` 指定，节点会装到你指定的位置 |
 | 重启后搜不到 **Merak** 节点 | 确认节点在 `ComfyUI/custom_nodes/merak-comfyui-node` 下，并查看 ComfyUI 控制台里的报错 |
 | `403 INFERENCE_NOT_ENABLED` | 你的账号没有开通推理权限 |

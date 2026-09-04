@@ -1,135 +1,108 @@
 #!/bin/sh
-# Feeds install.sh and install.ps1 the same fake ComfyUI layouts and checks that
-# both find the same thing. The two installers are separate files because no one
-# language runs on all three systems, so this is what keeps them in step.
-#
-#   tests/detect_test.sh
-#
-# PowerShell is optional: set PWSH to a pwsh binary to include install.ps1,
-# otherwise only install.sh is checked.
 
-set -u
+set -eu
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$(mktemp -d 2>/dev/null || mktemp -d -t merak-test)
-# The installers report resolved paths, so the fixtures must be resolved too
-# (on macOS mktemp hands back a /var symlink into /private/var).
-WORK=$(cd "$WORK" && pwd -P)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-PWSH=${PWSH:-pwsh}
-if command -v "$PWSH" >/dev/null 2>&1; then HAVE_PWSH=1; else HAVE_PWSH=0; fi
+SOURCE="$WORK/source/merak-comfyui-node-main"
+ARCHIVE="$WORK/node.tar.gz"
+mkdir -p "$SOURCE"
+cp "$REPO/merak_nodes.py" "$REPO/__init__.py" "$SOURCE/"
+tar -czf "$ARCHIVE" -C "$WORK/source" merak-comfyui-node-main
 
-# Spotlight and locate answer with the real installs on this machine, which the
-# fixtures know nothing about, so hide them from the search.
-STUB="$WORK/stub"
-mkdir -p "$STUB"
-for tool in mdfind locate plocate; do
-  printf '#!/bin/sh\nexit 1\n' >"$STUB/$tool"
-  chmod +x "$STUB/$tool"
-done
+checks=0
+failures=0
 
-comfy() { mkdir -p "$1/custom_nodes"; : >"$1/main.py"; }
-fails=0
-
-check() { # check <case> <expected line, or NONE>
-  name=$1
-  want=$2
-  home="$WORK/$name/home"
-
-  out=$(HOME="$home" PATH="$STUB:$PATH" sh "$REPO/install.sh" --detect-only --yes 2>&1 |
-        grep -E '^(found|maybe)' | sed "s|$home|~|g")
-  verdict sh "$name" "$want" "$out"
-
-  if [ "$HAVE_PWSH" -eq 1 ]; then
-    out=$(HOME="$home" APPDATA="$home/AppData/Roaming" LOCALAPPDATA="$home/AppData/Local" \
-          "$PWSH" -NoProfile -File "$REPO/install.ps1" -DetectOnly -Yes 2>&1 |
-          grep -E '^(found|maybe)' | sed "s|$home|~|g")
-    verdict ps "$name" "$want" "$out"
-  fi
+pass() {
+  checks=$((checks + 1))
+  printf 'ok - %s\n' "$1"
 }
 
-verdict() { # verdict <which> <case> <expected> <output>
-  if [ "$3" = NONE ]; then
-    if [ -z "$4" ]; then
-      echo "  ok   $1 $2 -> nothing"
-    else
-      echo "  FAIL $1 $2 -> $4"
-      fails=$((fails + 1))
-    fi
-  elif echo "$4" | grep -qF "$3"; then
-    echo "  ok   $1 $2 -> $(echo "$4" | tr '\n' ' ')"
-  else
-    echo "  FAIL $1 $2: wanted '$3', got '$(echo "$4" | tr '\n' ' ')'"
-    fails=$((fails + 1))
-  fi
+fail() {
+  checks=$((checks + 1))
+  failures=$((failures + 1))
+  printf 'FAIL - %s\n' "$1"
 }
 
-# The desktop app records every install it made, with ComfyUI one level down.
-H="$WORK/desktop2/home"
-comfy "$H/ComfyUI-Installs/My Install/ComfyUI"
-mkdir -p "$H/Library/Application Support/Comfy Desktop" "$H/AppData/Roaming/Comfy Desktop"
-RECORD='[{"id":"i1","name":"My Install","installPath":"'"$H"'/ComfyUI-Installs/My Install"}]'
-printf '%s' "$RECORD" >"$H/Library/Application Support/Comfy Desktop/installations.json"
-printf '%s' "$RECORD" >"$H/AppData/Roaming/Comfy Desktop/installations.json"
-check desktop2 "~/ComfyUI-Installs/My Install/ComfyUI"
+comfy() {
+  mkdir -p "$1/custom_nodes"
+  : >"$1/main.py"
+}
 
-# Older desktop builds record one basePath instead.
-H="$WORK/desktop1/home"
-comfy "$H/Documents/ComfyUI-Custom"
-mkdir -p "$H/Library/Application Support/ComfyUI" "$H/AppData/Roaming/ComfyUI"
-RECORD='{"basePath":"'"$H"'/Documents/ComfyUI-Custom"}'
-printf '%s' "$RECORD" >"$H/Library/Application Support/ComfyUI/config.json"
-printf '%s' "$RECORD" >"$H/AppData/Roaming/ComfyUI/config.json"
-check desktop1 "~/Documents/ComfyUI-Custom"
+run_installer() {
+  home=$1
+  shift
+  HOME="$home" MERAK_ARCHIVE="$ARCHIVE" sh "$REPO/install.sh" "$@" >"$WORK/output" 2>&1
+}
 
-# The same path turns up in extra_models_config.yaml.
-H="$WORK/yaml/home"
-comfy "$H/elsewhere/ComfyUI"
-mkdir -p "$H/Library/Application Support/ComfyUI" "$H/AppData/Roaming/ComfyUI"
-printf 'comfyui:\n  base_path: %s/elsewhere/ComfyUI\n' "$H" >"$H/Library/Application Support/ComfyUI/extra_models_config.yaml"
-cp "$H/Library/Application Support/ComfyUI/extra_models_config.yaml" "$H/AppData/Roaming/ComfyUI/extra_models_config.yaml"
-check yaml "~/elsewhere/ComfyUI"
-
-# comfy-cli remembers the workspace it installed into.
-H="$WORK/cli/home"
-comfy "$H/work/comfy"
-mkdir -p "$H/.config/comfy-cli"
-printf '[DEFAULT]\ndefault_workspace = %s/work/comfy\n' "$H" >"$H/.config/comfy-cli/config.ini"
-check cli "~/work/comfy"
-
-# A plain clone in the obvious place.
-H="$WORK/default/home"
-comfy "$H/ComfyUI"
-check default "~/ComfyUI"
-
-# custom_nodes with no ComfyUI beside it is a maybe, not a match.
-H="$WORK/bare/home"
-mkdir -p "$H/ComfyUI/custom_nodes"
-check bare "maybe ~/ComfyUI"
-
-# Nowhere anyone records: only the disk walk can turn this up.
-H="$WORK/deep/home"
-comfy "$H/projects/ai/stuff/ComfyUI"
-check deep "~/projects/ai/stuff/ComfyUI"
-
-# Nothing installed at all.
-H="$WORK/none/home"
-mkdir -p "$H"
-check none NONE
-
-# Two installs: both are offered.
-H="$WORK/multi/home"
-comfy "$H/ComfyUI"
-comfy "$H/Documents/ComfyUI"
-check multi "~/Documents/ComfyUI"
-
-echo
-if [ "$HAVE_PWSH" -eq 0 ]; then
-  echo "(install.ps1 not checked - no pwsh on PATH; set PWSH=/path/to/pwsh)"
-fi
-if [ "$fails" -eq 0 ]; then
-  echo "all detection cases pass"
+HOME_DIR="$WORK/explicit-home"
+ROOT="$WORK/explicit/ComfyUI"
+mkdir -p "$HOME_DIR"
+comfy "$ROOT"
+if run_installer "$HOME_DIR" --path "$ROOT" --key test-key --yes &&
+   [ -f "$ROOT/custom_nodes/merak-comfyui-node/merak_nodes.py" ] &&
+   [ "$(cat "$HOME_DIR/.merak/api_key")" = test-key ]; then
+  pass "explicit path installs the node and key"
 else
-  echo "$fails failures"
+  fail "explicit path installs the node and key"
+fi
+
+HOME_DIR="$WORK/default-home"
+ROOT="$HOME_DIR/ComfyUI"
+comfy "$ROOT"
+if run_installer "$HOME_DIR" --yes &&
+   [ -f "$ROOT/custom_nodes/merak-comfyui-node/merak_nodes.py" ] &&
+   [ ! -e "$HOME_DIR/.merak/api_key" ]; then
+  pass "common location installs without inventing a key"
+else
+  fail "common location installs without inventing a key"
+fi
+
+: >"$ROOT/custom_nodes/merak-comfyui-node/old-version"
+if run_installer "$HOME_DIR" --yes &&
+   [ -f "$ROOT/custom_nodes/merak-comfyui-node.previous/old-version" ]; then
+  pass "an update keeps the previous version"
+else
+  fail "an update keeps the previous version"
+fi
+
+HOME_DIR="$WORK/multiple-home"
+comfy "$HOME_DIR/ComfyUI"
+comfy "$HOME_DIR/Documents/ComfyUI"
+if run_installer "$HOME_DIR" --yes; then
+  fail "multiple installs require an explicit choice"
+elif grep -qF -- "--path" "$WORK/output" &&
+     [ ! -d "$HOME_DIR/ComfyUI/custom_nodes/merak-comfyui-node" ] &&
+     [ ! -d "$HOME_DIR/Documents/ComfyUI/custom_nodes/merak-comfyui-node" ]; then
+  pass "multiple installs require an explicit choice"
+else
+  fail "multiple installs require an explicit choice"
+fi
+
+HOME_DIR="$WORK/invalid-home"
+mkdir -p "$HOME_DIR"
+if run_installer "$HOME_DIR" --path "$HOME_DIR/missing" --yes; then
+  fail "invalid path is rejected"
+else
+  pass "invalid path is rejected"
+fi
+
+if HOME="$HOME_DIR" sh "$REPO/install.sh" --path >"$WORK/output" 2>&1; then
+  fail "missing option value is rejected"
+else
+  pass "missing option value is rejected"
+fi
+
+if HOME="$HOME_DIR" sh "$REPO/install.sh" --bogus >"$WORK/output" 2>&1; then
+  fail "unknown option is rejected"
+else
+  pass "unknown option is rejected"
+fi
+
+if [ "$failures" -gt 0 ]; then
+  printf '%s of %s checks failed\n' "$failures" "$checks"
   exit 1
 fi
+printf '%s checks passed\n' "$checks"

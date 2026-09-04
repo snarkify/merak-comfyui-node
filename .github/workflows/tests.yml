@@ -1,0 +1,32 @@
+name: installer tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  posix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell installer
+        run: |
+          sh -n install.sh
+          tests/detect_test.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/detect_test.ps1
+      - name: PowerShell 7
+        shell: pwsh
+        run: ./tests/detect_test.ps1
