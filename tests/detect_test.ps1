@@ -24,6 +24,8 @@ function Run-Installer([string]$HomePath, [string[]]$Arguments) {
         MERAK_ARCHIVE = $env:MERAK_ARCHIVE
     }
     try {
+        $savedErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $env:HOME = $HomePath
         $env:USERPROFILE = $HomePath
         if ($HomePath -match '^([A-Za-z]:)(.*)$') {
@@ -39,9 +41,11 @@ function Run-Installer([string]$HomePath, [string[]]$Arguments) {
         }
         $flags += @("-File", $Installer)
         $output = (& $HostExe @flags @Arguments 2>&1 | Out-String)
-        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $output }
+        $exitCode = $LASTEXITCODE
+        return [pscustomobject]@{ Code = $exitCode; Output = $output }
     }
     finally {
+        $ErrorActionPreference = $savedErrorActionPreference
         foreach ($name in $saved.Keys) {
             if ($null -eq $saved[$name]) {
                 Remove-Item "env:$name" -ErrorAction SilentlyContinue
