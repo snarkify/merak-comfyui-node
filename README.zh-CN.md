@@ -131,8 +131,17 @@ python main.py
 改 `filename_prefix` 可以换子目录，或加上 `%date:yyyy-MM-dd%` 这样的占位符。
 
 `team_id` 可以填在节点上，或放进 `MERAK_TEAM_ID` —— 在 merak 控制台的网址里能找到它。
+`MERAK_BASE_URL` 可以把节点指向服务的另一个部署。
 
 把图片接到 `first_frame`、`last_frame`（或两个都接）就变成图生视频。
+
+把一批图片接到 `reference_images`（最多 9 张）和/或把一段视频接到 `reference_video`，
+就变成参考生视频：主体、风格和运动来自参考素材。在提示词里用 `<Picture 1>`、
+`<Picture 2>`…（按批次顺序）和 `<Video 1>` 指代它们 —— Load Video 节点接
+`reference_video`，Batch Images 节点把多个 Load Image 叠成一批。关键帧可以同时接。
+参考视频须为 2–15 秒（用 Trim Video 裁短），且只用到不超过成片长度的开头部分。
+
+`model` 可选 **H3**（默认）、**H3 Fast**、**H3 Draft** —— Fast 和 Draft 用画质换速度，Draft 还更便宜。
 
 节点以 **VIDEO** 类型输出，可以接 Save Video、Trim Video、Get Video Components；
 同时还输出 **video_path**，供需要磁盘文件路径的节点使用。
@@ -140,7 +149,7 @@ python main.py
 **Merak Fetch Video (by id)** 用来重新下载一个已经提交过的渲染 —— 如果轮询超时了就用它。
 超时并不会取消服务端的任务。
 
-`examples/merak-video.json` 是一个现成的工作流，拖到画布上即可。
+`examples/merak-video.json` 是一个现成的工作流，所有输入都已接好；不需要的断开即可。拖到画布上就能用。
 
 ## 服务规格
 
@@ -150,7 +159,9 @@ python main.py
 | 画面比例 | `16:9`、`9:16`、`1:1` —— 关键帧会被适配到所选画布 |
 | Prompt | 最多 7000 字符 |
 | 音频 | 每个 clip 都自带，已混流 |
-| 关键帧 | 边长 256–5760 px，比例 0.4–2.5，≤30 MB |
+| 关键帧、参考图 | 边长 256–5760 px，比例 0.4–2.5，≤30 MB；参考图最多 9 张 |
+| 参考视频 | 一段，2–15 秒，边长 256–5760 px，比例 0.4–2.5，23.976–60 fps，≤50 MB；H.264 或 H.265，保留 AAC/MP3 音轨 |
+| 模型 | `H3`、`H3 Fast`、`H3 Draft` |
 
 22 帧那档超出了规格（H3 的设计区间是 5–15 秒），因此不是默认值。
 

@@ -14,9 +14,10 @@ import urllib.request
 from pathlib import PurePosixPath
 
 # Reported in the User-Agent on every request.
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
-BASE_URL = "https://api.merakcompute.ai"
+# Override with MERAK_BASE_URL to point the node at another deployment.
+BASE_URL = os.environ.get("MERAK_BASE_URL", "").strip() or "https://api.merakcompute.ai"
 
 # Where the key comes from. A value typed into a node widget is written into the
 # workflow JSON in clear text, and ComfyUI embeds that workflow in the metadata
@@ -36,9 +37,10 @@ CLIPS: dict[str, tuple[str, int]] = {
 ASPECT_RATIOS: dict[str, str] = {"16:9": "LANDSCAPE", "9:16": "PORTRAIT", "1:1": "SQUARE"}
 DEFAULT_ASPECT_RATIO = "16:9"
 
-# Fixed fields on every request.
-MODEL_ID = 1
-STEPS = 20
+# The models the service serves, by the id the API takes; the first is the
+# default. Steps are fixed per model server-side, so none are sent.
+MODELS: dict[str, int] = {"H3": 1, "H3 Fast": 2, "H3 Draft": 3}
+DEFAULT_MODEL = "H3"
 
 # The API's own bound on `prompt`, mirrored so a violation costs no round trip.
 MAX_PROMPT_CHARS = 7000
@@ -53,10 +55,21 @@ TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 SUCCESS_STATE = "SUCCEEDED"
 ACTIVE_STATES = frozenset({"ASSIGNED", "RUNNING"})
 
-# A clip can be conditioned on a first keyframe, a last keyframe, or both.
+# A clip can be conditioned on a first keyframe, a last keyframe, or both
+# (image-to-video), and on reference images and one reference video
+# (reference-to-video). A reference position N is `<Picture N+1>` or
+# `<Video N+1>` in the prompt.
 KEYFRAME_ROLES = ("FIRST_FRAME", "LAST_FRAME")
-KEYFRAME_CONTENT_TYPE = "image/png"
+REFERENCE_IMAGE_ROLE = "REFERENCE_IMAGE"
+REFERENCE_VIDEO_ROLE = "REFERENCE_VIDEO"
+REFERENCE_ROLES = (REFERENCE_IMAGE_ROLE, REFERENCE_VIDEO_ROLE)
+MAX_REFERENCE_IMAGES = 9
+IMAGE_CONTENT_TYPE = "image/png"
+VIDEO_CONTENT_TYPE = "video/mp4"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_VIDEO_BYTES = 50 * 1024 * 1024
+# What the service accepts for a reference video, in seconds.
+REFERENCE_VIDEO_SECONDS = (2.0, 15.0)
 
 _USER_AGENT = f"comfyui-merak-video/{VERSION}"
 _TRANSIENT = (
@@ -225,21 +238,39 @@ def resolve_team_id(api_key: str) -> str:
     raise MerakError(f"this account owns several teams — set team_id to one of: {listed}")
 
 
-def submit(
-    api_key: str,
-    team_id: str,
-    *,
-    prompt: str,
-    clip: str,
-    aspect_ratio: str = DEFAULT_ASPECT_RATIO,
-    seed: int = -1,
-    inputs: list[dict] | None = None,
-) -> dict:
-    """Create one inference; returns the 202 body (state QUEUED).
+def task_for(inputs: list[dict]) -> str:
+    """Which task a set of uploaded inputs asks for: a reference makes it
+    reference-to-video, a keyframe alone image-to-video, none text-to-video."""
+    roles = {item["role"] for item in inputs}
+    if roles & set(REFERENCE_ROLES):
+        return "R2V"
+    return "I2V" if roles else "T2V"
 
-    `inputs` are keyframes already uploaded by `upload_keyframes`. Any at all
-    makes this image-to-video; none makes it text-to-video.
+
+def resolve_workload(api_key: str, team_id: str, model_id: int, resolution: str, frames: int) -> str:
+    """The `workload_id` a submit must name, from the team's model menu.
+
+    The menu is the one place the pairing lives, and it also says whether the
+    model serves the requested clip, so a clip it does not serve is refused
+    here rather than as a 422 after the uploads.
     """
+    menu = _request(f"/v1/teams/{team_id}/video_inferences/models", api_key)
+    for model in menu if isinstance(menu, list) else menu.get("items") or []:
+        if model.get("model_id") != model_id:
+            continue
+        served = {(clip.get("resolution"), clip.get("frames")) for clip in model.get("clips") or []}
+        if (resolution, frames) not in served:
+            raise MerakError(
+                f"{model.get('display_name') or model_id} does not serve {resolution} × "
+                f"{frames} frames — choose another clip"
+            )
+        return model["workload_id"]
+    raise MerakError(f"model {model_id} is not on this team's model menu right now")
+
+
+def check_request(prompt: str, clip: str, model: str, aspect_ratio: str) -> str:
+    """The request's own fields, checked before any media is encoded or uploaded
+    so a bad one costs nothing. Returns the prompt as it will be sent."""
     prompt = (prompt or "").strip()
     if not prompt:
         raise MerakError("the prompt is empty")
@@ -251,18 +282,45 @@ def submit(
         )
     if clip not in CLIPS:
         raise MerakError(f"unknown clip {clip!r} — choose one of: {', '.join(CLIPS)}")
+    if model not in MODELS:
+        raise MerakError(f"unknown model {model!r} — choose one of: {', '.join(MODELS)}")
     if aspect_ratio not in ASPECT_RATIOS:
         raise MerakError(
             f"unknown aspect ratio {aspect_ratio!r} — choose one of: {', '.join(ASPECT_RATIOS)}"
         )
+    return prompt
+
+
+def submit(
+    api_key: str,
+    team_id: str,
+    *,
+    prompt: str,
+    clip: str,
+    model: str = DEFAULT_MODEL,
+    aspect_ratio: str = DEFAULT_ASPECT_RATIO,
+    seed: int = -1,
+    inputs: list[dict] | None = None,
+    workload_id: str | None = None,
+) -> dict:
+    """Create one inference; returns the 202 body (state QUEUED).
+
+    `inputs` are media already uploaded by `upload_inputs`; their roles decide
+    the task (see `task_for`). Pass the `workload_id` from `resolve_workload`
+    when it was resolved before the uploads; otherwise it is resolved here.
+    """
+    prompt = check_request(prompt, clip, model, aspect_ratio)
     resolution, frames = CLIPS[clip]
     inputs = list(inputs or [])
+    model_id = MODELS[model]
+    if workload_id is None:
+        workload_id = resolve_workload(api_key, team_id, model_id, resolution, frames)
     body: dict = {
-        "model_id": MODEL_ID,
-        "task": "I2V" if inputs else "T2V",
+        "workload_id": workload_id,
+        "model_id": model_id,
+        "task": task_for(inputs),
         "prompt": prompt,
         "frames": frames,
-        "steps": STEPS,
         "resolution": resolution,
         "aspect_ratio": ASPECT_RATIOS[aspect_ratio],
         "inputs": inputs,
@@ -275,8 +333,8 @@ def submit(
     )
 
 
-def upload_keyframe(api_key: str, team_id: str, data: bytes) -> str:
-    """Put one keyframe where the renderer can fetch it; returns its `input_id`.
+def upload_input(api_key: str, team_id: str, data: bytes, content_type: str) -> str:
+    """Put one image or video where the renderer can fetch it; returns its `input_id`.
 
     Three legs, and only the ones that talk to merak carry the API key:
 
@@ -289,11 +347,12 @@ def upload_keyframe(api_key: str, team_id: str, data: bytes) -> str:
        declaration. Only a READY input can be named in a submit.
     """
     if not data:
-        raise MerakError("the keyframe is empty")
-    if len(data) > MAX_IMAGE_BYTES:
+        raise MerakError("the input is empty")
+    limit = MAX_VIDEO_BYTES if content_type.startswith("video/") else MAX_IMAGE_BYTES
+    if len(data) > limit:
         raise MerakError(
-            f"the keyframe encodes to {len(data) / 1048576:.1f} MB, over the "
-            f"{MAX_IMAGE_BYTES // 1048576} MB the API accepts. Scale the image down; "
+            f"the input encodes to {len(data) / 1048576:.1f} MB, over the "
+            f"{limit // 1048576} MB the API accepts. Scale it down or trim it; "
             "nothing was sent."
         )
 
@@ -303,7 +362,7 @@ def upload_keyframe(api_key: str, team_id: str, data: bytes) -> str:
         api_key,
         method="POST",
         body={
-            "content_type": KEYFRAME_CONTENT_TYPE,
+            "content_type": content_type,
             "content_length": len(data),
             # An integrity checksum, not a security primitive — spelled out so
             # this still works on a FIPS build, where a bare md5() raises.
@@ -322,25 +381,25 @@ def upload_keyframe(api_key: str, team_id: str, data: bytes) -> str:
             pass
     except urllib.error.HTTPError as exc:
         # Storage answering, not merak: there is no error envelope to read.
-        raise MerakError(f"the keyframe upload was refused by storage: HTTP {exc.code}") from None
+        raise MerakError(f"the upload was refused by storage: HTTP {exc.code}") from None
     except _TRANSIENT as exc:
-        raise MerakUnavailable(f"the keyframe upload failed ({type(exc).__name__}): {exc}") from None
+        raise MerakUnavailable(f"the upload failed ({type(exc).__name__}): {exc}") from None
 
     completed = _request(f"{path}/{declared['input_id']}/complete", api_key, method="POST")
     if completed.get("state") != "READY":
-        raise MerakError(f"keyframe {declared['input_id']} is {completed.get('state')}, not READY")
+        raise MerakError(f"input {declared['input_id']} is {completed.get('state')}, not READY")
     return declared["input_id"]
 
 
-def upload_keyframes(api_key: str, team_id: str, frames) -> list[dict]:
-    """`frames` is `(role, bytes)` pairs; returns the `inputs` list `submit`
-    takes. Uploads happen before the submit, so a bad image is refused before
-    anything is queued or billed."""
+def upload_inputs(api_key: str, team_id: str, media) -> list[dict]:
+    """`media` is `(role, position, bytes, content_type)` tuples; returns the
+    `inputs` list `submit` takes. Uploads happen before the submit, so a bad
+    file is refused before anything is queued or billed."""
     inputs = []
-    for role, data in frames:
-        input_id = upload_keyframe(api_key, team_id, data)
-        print(f"[merak] {role.lower()} uploaded as input {input_id}")
-        inputs.append({"role": role, "input_id": input_id, "position": 0})
+    for role, position, data, content_type in media:
+        input_id = upload_input(api_key, team_id, data, content_type)
+        print(f"[merak] {role.lower()} {position} uploaded as input {input_id}")
+        inputs.append({"role": role, "input_id": input_id, "position": position})
     return inputs
 
 
