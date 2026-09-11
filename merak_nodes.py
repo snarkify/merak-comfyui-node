@@ -10,18 +10,31 @@ from .merak_api import (
     ASPECT_RATIOS,
     CLIPS,
     DEFAULT_ASPECT_RATIO,
+    DEFAULT_MODEL,
     DEFAULT_TIMEOUT_S,
+    IMAGE_CONTENT_TYPE,
     KEYFRAME_ROLES,
+    MAX_REFERENCE_IMAGES,
+    MODELS,
+    REFERENCE_IMAGE_ROLE,
+    REFERENCE_VIDEO_ROLE,
+    REFERENCE_VIDEO_SECONDS,
+    VIDEO_CONTENT_TYPE,
     MerakError,
+    check_request,
     download,
     extension,
     output_url,
     poll,
     resolve_api_key,
     resolve_team_id,
+    resolve_workload,
     submit,
-    upload_keyframes,
+    upload_inputs,
 )
+
+# What the service accepts for a reference video's soundtrack.
+ACCEPTED_AUDIO_CODECS = ("aac", "mp3")
 
 # A `filename_prefix` may name a subfolder and carry %date:...% tokens; the file
 # takes the next counter in that folder.
@@ -44,32 +57,112 @@ _OUTPUT_INPUTS = {
 }
 
 
-def encode_keyframe(image, label: str) -> bytes:
+def _as_batch(image):
     """A ComfyUI IMAGE (float tensor, batch x height x width x channel in 0..1)
-    as PNG bytes — the first image of the batch.
-
-    numpy and Pillow are imported lazily; ComfyUI supplies both.
-    """
+    as a numpy batch. numpy is imported lazily; ComfyUI supplies it."""
     import numpy as np
-    from PIL import Image
 
     if hasattr(image, "detach"):  # a torch tensor, possibly on the GPU
         image = image.detach().cpu().numpy()
     array = np.asarray(image, dtype=np.float32)
-    if array.ndim == 4:
-        if array.shape[0] > 1:
-            # One socket conditions one frame, so only the first is used.
-            print(
-                f"[merak] WARNING: {label} carries {array.shape[0]} images; using the "
-                "first and ignoring the rest"
-            )
-        array = array[0]
-    if array.ndim != 3 or array.shape[-1] < 3:
-        raise MerakError(f"a keyframe must be an RGB image, got shape {tuple(array.shape)}")
+    if array.ndim == 3:
+        array = array[None]
+    if array.ndim != 4 or array.shape[-1] < 3:
+        raise MerakError(f"an image input must be RGB, got shape {tuple(array.shape)}")
+    return array
+
+
+def _encode_png(array) -> bytes:
+    """One height x width x channel float image as PNG bytes. Pillow is
+    imported lazily; ComfyUI supplies it."""
+    import numpy as np
+    from PIL import Image
+
     raster = np.clip(array[..., :3] * 255.0 + 0.5, 0, 255).astype(np.uint8)
     buffer = io.BytesIO()
     Image.fromarray(raster, "RGB").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def encode_keyframe(image, label: str) -> bytes:
+    """The first image of a batch as PNG bytes: one socket conditions one frame."""
+    batch = _as_batch(image)
+    if batch.shape[0] > 1:
+        print(
+            f"[merak] WARNING: {label} carries {batch.shape[0]} images; using the "
+            "first and ignoring the rest"
+        )
+    return _encode_png(batch[0])
+
+
+def encode_reference_images(image) -> list[bytes]:
+    """Every image of a batch as PNG bytes, in batch order — the order the
+    prompt's `<Picture N>` tags count in."""
+    batch = _as_batch(image)
+    if batch.shape[0] > MAX_REFERENCE_IMAGES:
+        raise MerakError(
+            f"reference_images carries {batch.shape[0]} images; the service takes at "
+            f"most {MAX_REFERENCE_IMAGES}. Nothing was sent."
+        )
+    return [_encode_png(frame) for frame in batch]
+
+
+def _stream_layout(path: str) -> tuple[int, list[str]]:
+    """(video tracks, audio codec names) of a saved file. PyAV is ComfyUI's."""
+    import av
+
+    with av.open(path) as container:
+        return (
+            len(container.streams.video),
+            [stream.codec_context.name for stream in container.streams.audio],
+        )
+
+
+def _service_can_take(videos: int, audios: list[str]) -> bool:
+    return (
+        videos == 1
+        and len(audios) <= 1
+        and all(name.startswith(ACCEPTED_AUDIO_CODECS) for name in audios)
+    )
+
+
+def encode_reference_video(video) -> bytes:
+    """A ComfyUI VIDEO as MP4/H.264 bytes with at most one AAC/MP3 soundtrack,
+    which is what the service takes.
+
+    When the source already is an H.264 MP4, ComfyUI copies EVERY stream as it
+    is — an Opus soundtrack or a second audio track would survive and be
+    refused by the renderer after the upload. So the copy is inspected, and a
+    non-compliant one is saved again with a quality setting, which makes
+    ComfyUI transcode: one video track, one AAC track. The length is checked
+    first, for the same reason.
+    """
+    import tempfile
+
+    low, high = REFERENCE_VIDEO_SECONDS
+    try:
+        duration = float(video.get_duration())
+    except Exception:
+        duration = None  # not every VIDEO implementation can say; the service checks
+    if duration is not None and not low <= duration <= high:
+        raise MerakError(
+            f"the reference video is {duration:.1f} s; the service takes {low:g}–{high:g} s. "
+            "Trim it (a Trim Video node will do) — nothing was sent."
+        )
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "reference.mp4")
+        try:
+            from comfy_api.util import VideoCodec, VideoContainer
+
+            video.save_to(path, format=VideoContainer.MP4, codec=VideoCodec.H264)
+            if not _service_can_take(*_stream_layout(path)):
+                video.save_to(path, format=VideoContainer.MP4, codec=VideoCodec.H264, crf=18)
+        except Exception as exc:
+            raise MerakError(
+                f"could not encode the reference video ({type(exc).__name__}: {exc})"
+            ) from None
+        with open(path, "rb") as handle:
+            return handle.read()
 
 
 def _save_target(filename_prefix: str, suffix: str, fallback_name: str) -> tuple[str, str]:
@@ -204,10 +297,13 @@ def _never_cache(cls):
 
 @_never_cache
 class MerakGenerateVideo:
-    """Submit a prompt — and a first and/or last keyframe, if connected — wait,
+    """Submit a prompt — with keyframes and/or references, if connected — wait,
     then save the video into ComfyUI's output directory.
 
-    Returns it both as a VIDEO, for nodes that take one, and as the path on disk.
+    What is connected decides the task: nothing is text-to-video, a first
+    and/or last keyframe is image-to-video, and any reference image or video
+    is reference-to-video (keyframes may join it). Returns the clip both as a
+    VIDEO, for nodes that take one, and as the path on disk.
     """
 
     CATEGORY = "video/merak"
@@ -230,6 +326,23 @@ class MerakGenerateVideo:
             "optional": {
                 "first_frame": ("IMAGE", {"tooltip": "the clip opens on this image"}),
                 "last_frame": ("IMAGE", {"tooltip": "the clip closes on this image"}),
+                "reference_images": (
+                    "IMAGE",
+                    {
+                        "tooltip": (
+                            f"subject/style references, up to {MAX_REFERENCE_IMAGES} as a "
+                            "batch; write <Picture 1>, <Picture 2>… in the prompt, in batch order"
+                        )
+                    },
+                ),
+                "reference_video": (
+                    "VIDEO",
+                    {
+                        "tooltip": (
+                            "one motion/scene reference of 2–15 s; write <Video 1> in the prompt"
+                        )
+                    },
+                ),
                 "aspect_ratio": (
                     list(ASPECT_RATIOS),
                     {
@@ -247,6 +360,13 @@ class MerakGenerateVideo:
                     },
                 ),
                 **_OUTPUT_INPUTS,
+                # Appended LAST on purpose: ComfyUI stores widget values by
+                # position, so a widget added anywhere else would shift every
+                # value in every saved workflow.
+                "model": (
+                    list(MODELS),
+                    {"default": DEFAULT_MODEL, "tooltip": "Fast and Draft trade quality for speed"},
+                ),
             },
         }
 
@@ -257,28 +377,47 @@ class MerakGenerateVideo:
         clip,
         first_frame=None,
         last_frame=None,
+        reference_images=None,
+        reference_video=None,
         aspect_ratio=DEFAULT_ASPECT_RATIO,
         seed=-1,
         timeout_s=DEFAULT_TIMEOUT_S,
         filename_prefix=DEFAULT_FILENAME_PREFIX,
+        model=DEFAULT_MODEL,
     ):
         key, team = _resolve(team_id)
-        # Keyframes go up first: the submit that names them is the metered call,
-        # and it is not made until they are READY.
-        frames = [
-            (role, encode_keyframe(image, role.lower()))
+        # The request's own fields and the model menu are checked BEFORE any
+        # media is encoded or uploaded, so a bad clip or an unserved model costs
+        # nothing. Then media goes up: the submit that names it is the metered
+        # call, and it is not made until everything is READY.
+        check_request(prompt, clip, model, aspect_ratio)
+        resolution, frames = CLIPS[clip]
+        workload_id = resolve_workload(key, team, MODELS[model], resolution, frames)
+        media = [
+            (role, 0, encode_keyframe(image, role.lower()), IMAGE_CONTENT_TYPE)
             for role, image in zip(KEYFRAME_ROLES, (first_frame, last_frame), strict=True)
             if image is not None
         ]
-        inputs = upload_keyframes(key, team, frames)
+        if reference_images is not None:
+            media.extend(
+                (REFERENCE_IMAGE_ROLE, position, data, IMAGE_CONTENT_TYPE)
+                for position, data in enumerate(encode_reference_images(reference_images))
+            )
+        if reference_video is not None:
+            media.append(
+                (REFERENCE_VIDEO_ROLE, 0, encode_reference_video(reference_video), VIDEO_CONTENT_TYPE)
+            )
+        inputs = upload_inputs(key, team, media)
         job = submit(
             key,
             team,
             prompt=prompt,
             clip=clip,
+            model=model,
             aspect_ratio=aspect_ratio,
             seed=int(seed),
             inputs=inputs,
+            workload_id=workload_id,
         )["video_inference_id"]
         print(f"[merak] inference {job} submitted; polling…")
 

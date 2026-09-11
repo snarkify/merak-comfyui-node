@@ -137,8 +137,20 @@ lands in your output folder as `video/merak_00001_.mp4` and previews in place. C
 `filename_prefix` to pick a different subfolder or add `%date:yyyy-MM-dd%` tokens.
 
 `team_id` goes on the node, or in `MERAK_TEAM_ID` — find it in the merak console URL.
+`MERAK_BASE_URL` points the node at another deployment of the service.
 
 Connect an image to `first_frame`, `last_frame`, or both to make it image-to-video.
+
+Connect a batch of images to `reference_images` (up to 9) and/or a clip to
+`reference_video` to make it reference-to-video: the subject, style and motion come
+from the references. Name them in the prompt as `<Picture 1>`, `<Picture 2>`… in batch
+order and `<Video 1>` — a Load Video node feeds `reference_video`, and a Batch Images
+node stacks several Load Image nodes into one batch. Keyframes may be connected at the
+same time. A reference video must be 2–15 s (Trim Video shortens one); only its
+leading frames, up to the clip's own length, are used.
+
+`model` picks **H3** (default), **H3 Fast** or **H3 Draft** — Fast and Draft trade
+quality for speed and, for Draft, price.
 
 The node outputs the clip as a **VIDEO**, so it can feed Save Video, Trim Video or Get
 Video Components, and as **video_path** for anything that wants the file on disk.
@@ -146,7 +158,8 @@ Video Components, and as **video_path** for anything that wants the file on disk
 **Merak Fetch Video (by id)** re-downloads a render you already submitted — use it if a
 queue polls past its timeout. The timeout cancels nothing server-side.
 
-`examples/merak-video.json` is a ready-made graph. Drag it onto the canvas.
+`examples/merak-video.json` is a ready-made graph with every input wired; disconnect
+what you don't need. Drag it onto the canvas.
 
 ## What's served
 
@@ -156,7 +169,9 @@ queue polls past its timeout. The timeout cancels nothing server-side.
 | Aspect ratio | `16:9`, `9:16`, `1:1` — a keyframe is fitted to the canvas you pick |
 | Prompt | up to 7000 characters |
 | Audio | every clip has it, muxed in |
-| Keyframes | 256–5760 px a side, aspect 0.4–2.5, ≤30 MB |
+| Keyframes, reference images | 256–5760 px a side, aspect 0.4–2.5, ≤30 MB; up to 9 reference images |
+| Reference video | one, 2–15 s, 256–5760 px a side, aspect 0.4–2.5, 23.976–60 fps, ≤50 MB; H.264 or H.265, AAC or MP3 sound kept |
+| Models | `H3`, `H3 Fast`, `H3 Draft` |
 
 The 22-frame clip is off-spec — H3 is specified for 5–15 s — and is not the default.
 

@@ -1,14 +1,20 @@
 {
   "id": "merak-video",
   "revision": 0,
-  "last_node_id": 3,
-  "last_link_id": 0,
+  "last_node_id": 5,
+  "last_link_id": 3,
   "nodes": [
     {
       "id": 3,
       "type": "Note",
-      "pos": [-260, 60],
-      "size": [300, 100],
+      "pos": [
+        -260,
+        60
+      ],
+      "size": [
+        300,
+        100
+      ],
       "flags": {},
       "order": 0,
       "mode": 0,
@@ -16,7 +22,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "Text-to-video as it stands.\n\nFor image-to-video, drag Load Image's IMAGE output onto first_frame (and/or last_frame). Set team_id before queueing."
+        "Everything is wired for reference-to-video: a first frame, one reference image and a reference video. Disconnect what you don't need — the task follows the connections: nothing = text-to-video, keyframes only = image-to-video, any reference = reference-to-video. Name references in the prompt as <Picture 1>… (batch order) and <Video 1>."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -24,48 +30,196 @@
     {
       "id": 2,
       "type": "LoadImage",
-      "pos": [-260, 200],
-      "size": [315, 314],
+      "pos": [
+        -260,
+        200
+      ],
+      "size": [
+        315,
+        314
+      ],
       "flags": {},
       "order": 1,
       "mode": 0,
       "inputs": [],
       "outputs": [
-        {"name": "IMAGE", "type": "IMAGE", "links": null, "slot_index": 0},
-        {"name": "MASK", "type": "MASK", "links": null}
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
       ],
-      "properties": {"Node name for S&R": "LoadImage"},
-      "widgets_values": ["example.png", "image"]
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
     },
     {
       "id": 1,
       "type": "MerakGenerateVideo",
-      "pos": [120, 200],
-      "size": [480, 430],
+      "pos": [
+        120,
+        200
+      ],
+      "size": [
+        480,
+        430
+      ],
       "flags": {},
       "order": 2,
       "mode": 0,
       "inputs": [
-        {"name": "first_frame", "type": "IMAGE", "link": null},
-        {"name": "last_frame", "type": "IMAGE", "link": null}
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "reference_images",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "reference_video",
+          "type": "VIDEO",
+          "link": 3
+        }
       ],
       "outputs": [
-        {"name": "video_path", "type": "STRING", "links": null, "slot_index": 0}
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        }
       ],
-      "properties": {"Node name for S&R": "MerakGenerateVideo"},
+      "properties": {
+        "Node name for S&R": "MerakGenerateVideo"
+      },
       "widgets_values": [
-        "a paper boat floating on a calm pond",
+        "The subject of <Picture 1> moves with the motion of <Video 1>, starting from the first frame.",
         "",
         "480p · 243 frames (~10.1 s)",
         "16:9",
         -1,
         "fixed",
         3600,
-        "video/merak"
+        "video/merak",
+        "H3"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "LoadImage",
+      "pos": [
+        -260,
+        580
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "reference.png",
+        "image"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "LoadVideo",
+      "pos": [
+        -260,
+        840
+      ],
+      "size": [
+        315,
+        130
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "reference.mp4"
       ]
     }
   ],
-  "links": [],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      1,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      4,
+      0,
+      1,
+      2,
+      "IMAGE"
+    ],
+    [
+      3,
+      5,
+      0,
+      1,
+      3,
+      "VIDEO"
+    ]
+  ],
   "groups": [],
   "config": {},
   "extra": {},
