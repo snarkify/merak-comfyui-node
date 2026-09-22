@@ -191,7 +191,7 @@ def save_output(
 ) -> tuple[str, str]:
     url = output_url(api_key, team_id, detail)
     dest, subfolder = _save_target(
-        filename_prefix, extension(url), detail["video_inference_id"]
+        filename_prefix, extension(url), detail["job_id"]
     )
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     return download(url, dest), subfolder
@@ -418,7 +418,7 @@ class MerakGenerateVideo:
             seed=int(seed),
             inputs=inputs,
             workload_id=workload_id,
-        )["video_inference_id"]
+        )["job_id"]
         print(f"[merak] inference {job} submitted; polling…")
 
         bar = _Progress()
