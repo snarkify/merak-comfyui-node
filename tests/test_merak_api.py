@@ -1,7 +1,10 @@
 """Unit tests for the API client's request shaping. Standard library only:
 `python -m unittest discover -s tests -t .` from the repository root."""
 
+import io
+import json
 import unittest
+import urllib.error
 from unittest import mock
 
 import merak_api
@@ -43,7 +46,7 @@ class Submit(unittest.TestCase):
 
         def fake_request(path, api_key, method="GET", body=None, **_kwargs):
             calls.append((method, path, body))
-            return MENU if path.endswith("/models") else {"video_inference_id": "j" * 32}
+            return MENU if path.endswith("/models") else {"job_id": "j" * 32}
 
         inputs = [
             {"role": "REFERENCE_IMAGE", "input_id": "a" * 32, "position": 1},
@@ -82,13 +85,29 @@ class Submit(unittest.TestCase):
 
         def fake_request(path, api_key, method="GET", body=None, **_kwargs):
             calls.append(path)
-            return {"video_inference_id": "j" * 32}
+            return {"job_id": "j" * 32}
 
         with mock.patch.object(merak_api, "_request", fake_request):
             merak_api.submit(
                 "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), workload_id="w" * 32
             )
         self.assertEqual(calls, ["/v1/teams/team/video_inferences"])
+
+    def test_each_submit_sends_its_own_idempotency_key(self):
+        keys = []
+
+        def fake_request(path, api_key, method="GET", body=None, **_kwargs):
+            keys.append(body["idempotency_key"])
+            return {"job_id": "j" * 32}
+
+        with mock.patch.object(merak_api, "_request", fake_request):
+            for _ in range(2):
+                merak_api.submit(
+                    "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), workload_id="w" * 32
+                )
+        for key in keys:
+            self.assertRegex(key, r"^[0-9a-f]{32}$")
+        self.assertNotEqual(keys[0], keys[1])
 
     def test_check_request_needs_no_network(self):
         with mock.patch.object(merak_api, "_request", side_effect=AssertionError("network")):
@@ -101,6 +120,59 @@ class Submit(unittest.TestCase):
     def test_unknown_model_is_refused(self):
         with self.assertRaises(merak_api.MerakError):
             merak_api.submit("key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), model="H2")
+
+
+def _fake_open(outcomes):
+    """An `_opener.open` stand-in: each call takes the next outcome, raising it
+    if it is an exception, else answering it as the JSON body."""
+    sent = []
+
+    def fake_open(request, timeout):  # noqa: ARG001
+        sent.append(request)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return io.BytesIO(json.dumps(outcome).encode())
+
+    return sent, fake_open
+
+
+class Retry(unittest.TestCase):
+    def test_a_dropped_submit_is_retried_with_the_same_key(self):
+        sent, fake_open = _fake_open([ConnectionResetError("reset"), {"job_id": "j" * 32}])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ):
+            created = merak_api.submit(
+                "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), workload_id="w" * 32
+            )
+        self.assertEqual(created["job_id"], "j" * 32)
+        keys = [json.loads(request.data)["idempotency_key"] for request in sent]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], keys[1])
+
+    def test_any_other_post_is_sent_once(self):
+        sent, fake_open = _fake_open([ConnectionResetError("reset")])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ), self.assertRaises(merak_api.MerakUnavailable):
+            merak_api._request("/v1/teams/t/video_inferences/inputs", "key", method="POST", body={})
+        self.assertEqual(len(sent), 1)
+
+
+class OutputUrl(unittest.TestCase):
+    def test_the_delivery_route_is_named_by_job_id(self):
+        def fake_open(request, timeout):  # noqa: ARG001
+            raise urllib.error.HTTPError(
+                request.full_url, 302, "Found", {"Location": "https://storage/v.mp4"}, None
+            )
+
+        with mock.patch.object(merak_api._opener, "open", side_effect=fake_open) as opened:
+            url = merak_api.output_url("key", "team", {"job_id": "j" * 32})
+        self.assertEqual(url, "https://storage/v.mp4")
+        self.assertTrue(
+            opened.call_args.args[0].full_url.endswith(f"/v1/teams/team/video_inferences/{'j' * 32}/output")
+        )
 
 
 class Upload(unittest.TestCase):

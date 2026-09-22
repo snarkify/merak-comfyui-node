@@ -11,10 +11,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import PurePosixPath
 
 # Reported in the User-Agent on every request.
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # Override with MERAK_BASE_URL to point the node at another deployment.
 BASE_URL = os.environ.get("MERAK_BASE_URL", "").strip() or "https://api.merakcompute.ai"
@@ -156,13 +157,17 @@ def _request(
     body: dict | None = None,
     timeout: int = 30,
     retries: int = 2,
+    idempotent: bool = False,
 ) -> dict:
     """One API call, returning parsed JSON.
 
-    Retries are for GETs ONLY. Creating a render is not idempotent and the route
-    offers no idempotency key, so a retried POST bills a second render. A 4xx is
-    an answer and is not retried, except the two that mean "later".
+    Retries are for GETs, and for a POST the caller marks `idempotent`: a submit
+    carries an idempotency key, and the API answers a repeated key with the
+    render it already created, so a retried submit cannot bill a second render.
+    Any other POST is sent once. A 4xx is an answer and is not retried, except
+    the two that mean "later".
     """
+    retry_ok = method == "GET" or idempotent
     request = urllib.request.Request(
         BASE_URL.rstrip("/") + path,
         data=json.dumps(body).encode() if body is not None else None,
@@ -183,13 +188,13 @@ def _request(
                 return json.loads(response.read())
         except urllib.error.HTTPError as exc:
             retryable = exc.code >= 500 or exc.code in _RETRYABLE_STATUSES
-            if method == "GET" and retryable and attempt < retries:
+            if retry_ok and retryable and attempt < retries:
                 attempt += 1
                 time.sleep(_retry_delay(exc, attempt))
                 continue
             raise _error(exc) from None
         except _TRANSIENT as exc:
-            if method == "GET" and attempt < retries:
+            if retry_ok and attempt < retries:
                 attempt += 1
                 time.sleep(2 * attempt)
                 continue
@@ -303,7 +308,8 @@ def submit(
     inputs: list[dict] | None = None,
     workload_id: str | None = None,
 ) -> dict:
-    """Create one inference; returns the 202 body (state QUEUED).
+    """Create one inference; returns its body — 202 with state QUEUED, or 200
+    with the render already created when a retry replays this submit's key.
 
     `inputs` are media already uploaded by `upload_inputs`; their roles decide
     the task (see `task_for`). Pass the `workload_id` from `resolve_workload`
@@ -324,12 +330,15 @@ def submit(
         "resolution": resolution,
         "aspect_ratio": ASPECT_RATIOS[aspect_ratio],
         "inputs": inputs,
+        # One per submit, so a retry of this request replays the render it
+        # created instead of creating a second one.
+        "idempotency_key": uuid.uuid4().hex,
     }
     # -1 means the server picks. 0 is a real seed.
     if seed >= 0:
         body["seed"] = seed
     return _request(
-        f"/v1/teams/{team_id}/video_inferences", api_key, method="POST", body=body
+        f"/v1/teams/{team_id}/video_inferences", api_key, method="POST", body=body, idempotent=True
     )
 
 
@@ -456,7 +465,7 @@ def output_url(api_key: str, team_id: str, detail: dict) -> str:
     url = detail.get("output_url")
     if url:
         return url
-    path = f"/v1/teams/{team_id}/video_inferences/{detail['video_inference_id']}/output"
+    path = f"/v1/teams/{team_id}/video_inferences/{detail['job_id']}/output"
     request = urllib.request.Request(
         BASE_URL.rstrip("/") + path,
         headers={"X-Api-Key": api_key, "User-Agent": _USER_AGENT},
