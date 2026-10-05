@@ -20,7 +20,7 @@ merak_nodes = importlib.import_module("merak_comfyui_node.merak_nodes")
 MENU = [
     {
         "workload_id": "w" * 32,
-        "model_id": 3,
+        "capability_id": 3,
         "display_name": "H3 Draft",
         "clips": [{"resolution": "P480", "frames": 243}, {"resolution": "P480", "frames": 22}],
     }
@@ -58,13 +58,27 @@ class Submit(unittest.TestCase):
                 model="H3 Draft", inputs=inputs,
             )
         method, path, body = calls[-1]
-        self.assertEqual((method, path), ("POST", "/v1/teams/team/video_inferences"))
+        self.assertEqual(calls[0][:2], ("GET", "/v1/teams/team/jobs/models"))
+        self.assertEqual((method, path), ("POST", "/v1/teams/team/jobs"))
         self.assertEqual(body["workload_id"], "w" * 32)
-        self.assertEqual(body["model_id"], 3)
-        self.assertEqual(body["task"], "R2V")
-        self.assertEqual(body["inputs"], inputs)
-        self.assertNotIn("steps", body)
-        self.assertNotIn("seed", body)
+        self.assertEqual(body["capability_id"], 3)
+        self.assertEqual(body["job_type"], "VIDEO")
+        self.assertEqual(body["request"], {
+            "task": "R2V", "prompt": "<Picture 1> and <Picture 2>",
+            "frames": 243, "resolution": "P480", "aspect_ratio": "LANDSCAPE",
+        })
+        self.assertEqual(body["inputs"], [item["input_id"] for item in inputs])
+        self.assertNotIn("model_id", body)
+        self.assertNotIn("steps", body["request"])
+        self.assertNotIn("seed", body["request"])
+
+    def test_seed_zero_is_sent_in_the_video_request(self):
+        with mock.patch.object(merak_api, "_request", return_value={}) as requested:
+            merak_api.submit(
+                "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)),
+                workload_id="w" * 32, seed=0,
+            )
+        self.assertEqual(requested.call_args.kwargs["body"]["request"]["seed"], 0)
 
     def test_a_clip_the_model_does_not_serve_is_refused_before_submit(self):
         def fake_request(path, api_key, method="GET", body=None, **_kwargs):
@@ -91,7 +105,7 @@ class Submit(unittest.TestCase):
             merak_api.submit(
                 "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), workload_id="w" * 32
             )
-        self.assertEqual(calls, ["/v1/teams/team/video_inferences"])
+        self.assertEqual(calls, ["/v1/teams/team/jobs"])
 
     def test_each_submit_sends_its_own_idempotency_key(self):
         keys = []
@@ -151,43 +165,124 @@ class Retry(unittest.TestCase):
         self.assertEqual(len(keys), 2)
         self.assertEqual(keys[0], keys[1])
 
+    def test_a_dropped_declaration_reuses_its_input_key(self):
+        declared = [{"input_id": "1" * 32, "upload": {}}]
+        completed = [{"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}}]
+        sent, fake_open = _fake_open([ConnectionResetError("reset"), declared, completed])
+        with mock.patch.object(merak_api._opener, "open", fake_open), \
+             mock.patch.object(merak_api.time, "sleep"), \
+             mock.patch.object(merak_api, "_put"):
+            merak_api.upload_inputs(
+                "key", "team", [("FIRST_FRAME", 0, b"a", "image/png")],
+                workload_id="w" * 32, model_id=1,
+            )
+        declarations = [json.loads(request.data) for request in sent[:2]]
+        self.assertEqual(declarations[0], declarations[1])
+        self.assertRegex(declarations[0]["inputs"][0]["idempotency_key"], r"^[0-9a-f]{32}$")
+        self.assertEqual(sent[-1].full_url, merak_api.BASE_URL + "/v1/teams/team/jobs/inputs/complete")
+
     def test_any_other_post_is_sent_once(self):
         sent, fake_open = _fake_open([ConnectionResetError("reset")])
         with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
             merak_api.time, "sleep"
         ), self.assertRaises(merak_api.MerakUnavailable):
-            merak_api._request("/v1/teams/t/video_inferences/inputs", "key", method="POST", body={})
+            merak_api._request("/v1/teams/t/jobs/inputs", "key", method="POST", body={})
         self.assertEqual(len(sent), 1)
 
 
 class OutputUrl(unittest.TestCase):
-    def test_the_delivery_route_is_named_by_job_id(self):
+    def test_the_delivery_route_names_the_video_output(self):
         def fake_open(request, timeout):  # noqa: ARG001
             raise urllib.error.HTTPError(
                 request.full_url, 302, "Found", {"Location": "https://storage/v.mp4"}, None
             )
 
         with mock.patch.object(merak_api._opener, "open", side_effect=fake_open) as opened:
-            url = merak_api.output_url("key", "team", {"job_id": "j" * 32})
+            url = merak_api.output_url("key", "team", {
+                "job_id": "j" * 32,
+                "outputs": [
+                    {"output_id": "p" * 32, "role": "PROOF"},
+                    {"output_id": "v" * 32, "role": "VIDEO"},
+                ],
+            })
         self.assertEqual(url, "https://storage/v.mp4")
         self.assertTrue(
-            opened.call_args.args[0].full_url.endswith(f"/v1/teams/team/video_inferences/{'j' * 32}/output")
+            opened.call_args.args[0].full_url.endswith(
+                f"/v1/teams/team/jobs/{'j' * 32}/outputs/{'v' * 32}"
+            )
         )
+
+    def test_a_job_without_a_video_output_is_refused(self):
+        with mock.patch.object(merak_api._opener, "open", side_effect=AssertionError("network")):
+            with self.assertRaisesRegex(merak_api.MerakError, "no video output"):
+                merak_api.output_url("key", "team", {"job_id": "j" * 32, "outputs": []})
+
+
+class Poll(unittest.TestCase):
+    def test_reads_the_shared_job_route(self):
+        detail = {"job_id": "j" * 32, "state": "SUCCEEDED"}
+        with mock.patch.object(merak_api, "_request", return_value=detail) as requested:
+            self.assertEqual(merak_api.poll("key", "team", detail["job_id"]), detail)
+        requested.assert_called_once_with(f"/v1/teams/team/jobs/{'j' * 32}", "key")
 
 
 class Upload(unittest.TestCase):
+    MEDIA = [("REFERENCE_IMAGE", 1, b"a", "image/png"), ("REFERENCE_VIDEO", 0, b"b", "video/mp4")]
+
+    def _upload(self, media):
+        return merak_api.upload_inputs("k", "t", media, workload_id="w" * 32, model_id=1)
+
     def test_size_caps_follow_the_media_type(self):
         with mock.patch.object(merak_api, "_request", side_effect=AssertionError("sent")):
-            with self.assertRaises(merak_api.MerakError):
-                merak_api.upload_input("k", "t", b"x" * (merak_api.MAX_IMAGE_BYTES + 1), "image/png")
-            with self.assertRaises(merak_api.MerakError):
-                merak_api.upload_input("k", "t", b"x" * (merak_api.MAX_VIDEO_BYTES + 1), "video/mp4")
+            for data, content_type in [
+                (b"x" * (merak_api.MAX_IMAGE_BYTES + 1), "image/png"),
+                (b"x" * (merak_api.MAX_VIDEO_BYTES + 1), "video/mp4"),
+            ]:
+                with self.assertRaises(merak_api.MerakError):
+                    # The oversized file is refused before the valid one beside it is declared.
+                    self._upload([self.MEDIA[0], ("REFERENCE_IMAGE", 2, data, content_type)])
 
-    def test_upload_inputs_keeps_role_and_position(self):
-        with mock.patch.object(merak_api, "upload_input", side_effect=["1" * 32, "2" * 32]):
-            inputs = merak_api.upload_inputs(
-                "k", "t", [("REFERENCE_IMAGE", 1, b"a", "image/png"), ("REFERENCE_VIDEO", 0, b"b", "video/mp4")]
-            )
+    def test_no_media_sends_nothing(self):
+        with mock.patch.object(merak_api, "_request", side_effect=AssertionError("sent")):
+            self.assertEqual(self._upload([]), [])
+
+    def test_one_declaration_for_every_file_keeps_role_and_position(self):
+        declared = [
+            {"input_id": "1" * 32, "upload": {"url": "https://storage/1"}},
+            {"input_id": "2" * 32, "upload": {"url": "https://storage/2"}},
+        ]
+        completed = [
+            {"outcome": "success", "input_id": row["input_id"], "input": {"state": "READY"}}
+            for row in declared
+        ]
+        with mock.patch.object(
+            merak_api, "_request", side_effect=[declared, completed]
+        ) as requested, mock.patch.object(merak_api, "_put") as put:
+            inputs = self._upload(self.MEDIA)
+
+        path, _ = requested.call_args_list[0].args
+        body = requested.call_args_list[0].kwargs["body"]
+        self.assertEqual(path, "/v1/teams/t/jobs/inputs")
+        self.assertEqual((body["workload_id"], body["capability_id"]), ("w" * 32, 1))
+        keys = [item["idempotency_key"] for item in body["inputs"]]
+        for key in keys:
+            self.assertRegex(key, r"^[0-9a-f]{32}$")
+        self.assertEqual(len(set(keys)), 2)
+        self.assertTrue(requested.call_args_list[0].kwargs["idempotent"])
+        self.assertEqual(len(requested.call_args_list), 2)
+        self.assertEqual(requested.call_args_list[1].args, (path + "/complete", "k"))
+        self.assertEqual(requested.call_args_list[1].kwargs["body"], {
+            "input_ids": [row["input_id"] for row in declared],
+        })
+        self.assertTrue(requested.call_args_list[1].kwargs["idempotent"])
+        self.assertEqual(
+            [(item["role"], item["position"], item["content_type"]) for item in body["inputs"]],
+            [("REFERENCE_IMAGE", 1, "image/png"), ("REFERENCE_VIDEO", 0, "video/mp4")],
+        )
+        self.assertEqual([call.args for call in put.call_args_list], [
+            (declared[0]["upload"], b"a"),
+            (declared[1]["upload"], b"b"),
+        ])
         self.assertEqual(
             inputs,
             [
@@ -195,6 +290,21 @@ class Upload(unittest.TestCase):
                 {"role": "REFERENCE_VIDEO", "input_id": "2" * 32, "position": 0},
             ],
         )
+
+    def test_a_partial_completion_failure_is_reported(self):
+        declared = [
+            {"input_id": "1" * 32, "upload": {}},
+            {"input_id": "2" * 32, "upload": {}},
+        ]
+        completed = [
+            {"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}},
+            {"outcome": "failure", "input_id": "2" * 32, "status_code": 409,
+             "code": "INPUT_MISSING", "message": "input was not uploaded"},
+        ]
+        with mock.patch.object(merak_api, "_request", side_effect=[declared, completed]), \
+             mock.patch.object(merak_api, "_put"):
+            with self.assertRaisesRegex(merak_api.MerakError, "HTTP 409 INPUT_MISSING"):
+                self._upload(self.MEDIA)
 
 
 if __name__ == "__main__":

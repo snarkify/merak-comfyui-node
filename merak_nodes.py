@@ -407,7 +407,7 @@ class MerakGenerateVideo:
             media.append(
                 (REFERENCE_VIDEO_ROLE, 0, encode_reference_video(reference_video), VIDEO_CONTENT_TYPE)
             )
-        inputs = upload_inputs(key, team, media)
+        inputs = upload_inputs(key, team, media, workload_id=workload_id, model_id=MODELS[model])
         job = submit(
             key,
             team,
