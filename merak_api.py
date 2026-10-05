@@ -424,8 +424,10 @@ def upload_inputs(
         },
         idempotent=True,
     )
+    declarations = {(row["role"], row["position"]): row for row in declared}
     inputs = []
-    for (role, position, data, _), row in zip(media, declared, strict=True):
+    for role, position, data, _ in media:
+        row = declarations[(role, position)]
         _put(row["upload"], data)
         inputs.append({"role": role, "input_id": row["input_id"], "position": position})
     completed = _request(
@@ -435,7 +437,9 @@ def upload_inputs(
         body={"input_ids": [item["input_id"] for item in inputs]},
         idempotent=True,
     )
-    for row, result in zip(inputs, completed, strict=True):
+    results = {result["input_id"]: result for result in completed}
+    for row in inputs:
+        result = results[row["input_id"]]
         if result["outcome"] == "failure":
             raise MerakError(
                 f"input {result['input_id']}: HTTP {result['status_code']} "

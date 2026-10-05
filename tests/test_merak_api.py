@@ -166,7 +166,7 @@ class Retry(unittest.TestCase):
         self.assertEqual(keys[0], keys[1])
 
     def test_a_dropped_declaration_reuses_its_input_key(self):
-        declared = [{"input_id": "1" * 32, "upload": {}}]
+        declared = [{"input_id": "1" * 32, "role": "FIRST_FRAME", "position": 0, "upload": {}}]
         completed = [{"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}}]
         sent, fake_open = _fake_open([ConnectionResetError("reset"), declared, completed])
         with mock.patch.object(merak_api._opener, "open", fake_open), \
@@ -188,6 +188,22 @@ class Retry(unittest.TestCase):
         ), self.assertRaises(merak_api.MerakUnavailable):
             merak_api._request("/v1/teams/t/jobs/inputs", "key", method="POST", body={})
         self.assertEqual(len(sent), 1)
+
+    def test_a_dropped_completion_reuses_the_input_ids(self):
+        declared = [{"input_id": "1" * 32, "role": "FIRST_FRAME", "position": 0, "upload": {}}]
+        completed = [{"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}}]
+        sent, fake_open = _fake_open([declared, ConnectionResetError("reset"), completed])
+        with mock.patch.object(merak_api._opener, "open", fake_open), \
+             mock.patch.object(merak_api.time, "sleep"), \
+             mock.patch.object(merak_api, "_put"):
+            inputs = merak_api.upload_inputs(
+                "key", "team", [("FIRST_FRAME", 0, b"a", "image/png")],
+                workload_id="w" * 32, model_id=1,
+            )
+        self.assertEqual(inputs[0]["input_id"], "1" * 32)
+        self.assertEqual([json.loads(request.data) for request in sent[1:]], [
+            {"input_ids": ["1" * 32]}, {"input_ids": ["1" * 32]},
+        ])
 
 
 class OutputUrl(unittest.TestCase):
@@ -248,8 +264,10 @@ class Upload(unittest.TestCase):
 
     def test_one_declaration_for_every_file_keeps_role_and_position(self):
         declared = [
-            {"input_id": "1" * 32, "upload": {"url": "https://storage/1"}},
-            {"input_id": "2" * 32, "upload": {"url": "https://storage/2"}},
+            {"input_id": "1" * 32, "role": "REFERENCE_IMAGE", "position": 1,
+             "upload": {"url": "https://storage/1"}},
+            {"input_id": "2" * 32, "role": "REFERENCE_VIDEO", "position": 0,
+             "upload": {"url": "https://storage/2"}},
         ]
         completed = [
             {"outcome": "success", "input_id": row["input_id"], "input": {"state": "READY"}}
@@ -293,8 +311,8 @@ class Upload(unittest.TestCase):
 
     def test_a_partial_completion_failure_is_reported(self):
         declared = [
-            {"input_id": "1" * 32, "upload": {}},
-            {"input_id": "2" * 32, "upload": {}},
+            {"input_id": "1" * 32, "role": "REFERENCE_IMAGE", "position": 1, "upload": {}},
+            {"input_id": "2" * 32, "role": "REFERENCE_VIDEO", "position": 0, "upload": {}},
         ]
         completed = [
             {"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}},
@@ -305,6 +323,23 @@ class Upload(unittest.TestCase):
              mock.patch.object(merak_api, "_put"):
             with self.assertRaisesRegex(merak_api.MerakError, "HTTP 409 INPUT_MISSING"):
                 self._upload(self.MEDIA)
+
+    def test_reordered_grants_are_matched_to_the_right_file(self):
+        declared = [
+            {"input_id": "2" * 32, "role": "REFERENCE_VIDEO", "position": 0, "upload": {"url": "video"}},
+            {"input_id": "1" * 32, "role": "REFERENCE_IMAGE", "position": 1, "upload": {"url": "image"}},
+        ]
+        completed = [
+            {"outcome": "success", "input_id": row["input_id"], "input": {"state": "READY"}}
+            for row in declared
+        ]
+        with mock.patch.object(merak_api, "_request", side_effect=[declared, completed]), \
+             mock.patch.object(merak_api, "_put") as put:
+            inputs = self._upload(self.MEDIA)
+        self.assertEqual([call.args for call in put.call_args_list], [
+            ({"url": "image"}, b"a"), ({"url": "video"}, b"b"),
+        ])
+        self.assertEqual([item["input_id"] for item in inputs], ["1" * 32, "2" * 32])
 
 
 if __name__ == "__main__":
