@@ -216,31 +216,23 @@ def resolve_api_key() -> str:
 def resolve_team_id(api_key: str) -> str:
     """The team this key submits against.
 
-    The team is a path segment, so when it is not supplied it is derived from the
-    key: the one team the account owns. Ownership is the access rule, and
-    ambiguity is reported rather than guessed, since a render is billed to the
-    team that ran it.
+    The team is a path segment, so when it is not supplied it is derived from
+    the account's active memberships. Keep the existing default of its only
+    owned team; otherwise use its only active team. Any member role can submit
+    to an explicit team. An ambiguous choice needs `team_id`, since it pays.
     """
-    try:
-        teams = _request("/v1/users/me", api_key).get("teams") or []
-    except MerakError as failure:
-        if "KEY_SCOPE_FORBIDDEN" in str(failure):
-            raise MerakError(
-                "this key is scoped to inference only, so it cannot look up which team "
-                "it belongs to — set team_id on the node (find it in the merak console "
-                "URL, or on the team page)"
-            ) from None
-        raise
+    teams = _request("/v1/users/me", api_key).get("teams") or []
     owned = [team for team in teams if team.get("role") == "OWNER"]
-    if len(owned) == 1:
-        return owned[0]["team_id"]
-    if not owned:
+    candidates = owned or teams
+    if len(candidates) == 1:
+        return candidates[0]["team_id"]
+    if not teams:
         raise MerakError(
-            "this key's account owns no team — inference requires you to OWN the team "
-            "(being a member of someone else's is not enough)"
+            "this key's account is not a member of an active team — join or create "
+            "a team before submitting video jobs"
         )
-    listed = ", ".join(f"{team['team_id']} ({team['name']})" for team in owned)
-    raise MerakError(f"this account owns several teams — set team_id to one of: {listed}")
+    listed = ", ".join(f"{team['team_id']} ({team['name']})" for team in teams)
+    raise MerakError(f"this account belongs to several teams — set team_id to one of: {listed}")
 
 
 def task_for(inputs: list[dict]) -> str:
@@ -435,6 +427,7 @@ def upload_inputs(
         api_key,
         method="POST",
         body={"input_ids": [item["input_id"] for item in inputs]},
+        # READY inputs succeed again, so a lost reply can replay these same IDs.
         idempotent=True,
     )
     results = {result["input_id"]: result for result in completed}

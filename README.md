@@ -137,6 +137,9 @@ lands in your output folder as `video/merak_00001_.mp4` and previews in place. C
 `filename_prefix` to pick a different subfolder or add `%date:yyyy-MM-dd%` tokens.
 
 `team_id` goes on the node, or in `MERAK_TEAM_ID` — find it in the merak console URL.
+If both are blank, the node keeps the default of your only owned team, or selects your
+only active team if you own none. Set `team_id` to choose a shared team or resolve an
+ambiguous choice. OWNER, ADMIN and MEMBER roles can submit.
 `MERAK_BASE_URL` points the node at another deployment of the service.
 
 Connect an image to `first_frame`, `last_frame`, or both to make it image-to-video.
@@ -157,6 +160,8 @@ Video Components, and as **video_path** for anything that wants the file on disk
 
 **Merak Fetch Video (by id)** re-downloads a render you already submitted — use it if a
 queue polls past its timeout. The timeout cancels nothing server-side.
+Paste the video's `job_id` into its `video_inference_id` field. The field keeps its
+existing name so saved workflows continue to load.
 
 `examples/merak-video.json` is a ready-made graph with every input wired; disconnect
 what you don't need. Drag it onto the canvas.
@@ -186,7 +191,7 @@ it back (`0` is a real seed).
 | It picked the wrong ComfyUI | pass `--path` / `-ComfyPath`; the node goes wherever you point it |
 | No **Merak** nodes after restarting | check the node landed in `ComfyUI/custom_nodes/merak-comfyui-node`, and look at the ComfyUI console for the error |
 | `403 INFERENCE_NOT_ENABLED` | inference is not enabled for your account |
-| `403` / `404` naming the team | you must **own** the team; membership is not enough |
+| `403` / `404` naming the team | check `team_id` and your active membership in that team |
 | `401` | key missing or revoked — check `~/.merak/api_key` holds the key and nothing else |
 | Render `FAILED` with `input image …` | keyframe outside the size or aspect limits — no charge |
 | Poll times out | the render is **not** cancelled — re-attach with *Merak Fetch Video* |

@@ -40,7 +40,10 @@ ACCEPTED_AUDIO_CODECS = ("aac", "mp3")
 # takes the next counter in that folder.
 DEFAULT_FILENAME_PREFIX = "video/merak"
 
-_TEAM_TOOLTIP = "Your merak team id, from the console URL. Blank falls back to MERAK_TEAM_ID."
+_TEAM_TOOLTIP = (
+    "Your merak team id, from the console URL. Blank uses MERAK_TEAM_ID, then "
+    "your only owned team or only active team. Set it explicitly to use a shared team."
+)
 # Both nodes save the same way, so they offer the same two controls.
 _OUTPUT_INPUTS = {
     "timeout_s": ("INT", {"default": DEFAULT_TIMEOUT_S, "min": 60, "max": 21600}),
@@ -230,7 +233,7 @@ class _Progress:
         if self._bar is None:
             return
         try:
-            self._bar.update_absolute(int(fraction * self.TOTAL), self.TOTAL)
+            self._bar.update_absolute(round(fraction * self.TOTAL), self.TOTAL)
         except Exception:
             # Reporting progress must never be able to fail a paid render.
             self._bar = None
@@ -419,7 +422,7 @@ class MerakGenerateVideo:
             inputs=inputs,
             workload_id=workload_id,
         )["job_id"]
-        print(f"[merak] inference {job} submitted; polling…")
+        print(f"[merak] job_id {job} submitted; polling…")
 
         bar = _Progress()
 
@@ -449,7 +452,11 @@ class MerakFetchVideo:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video_inference_id": ("STRING", {"default": ""}),
+                # Keep the saved input name and widget position for existing workflows.
+                "video_inference_id": (
+                    "STRING",
+                    {"default": "", "tooltip": "The video's job_id, from the console or submit log."},
+                ),
                 "team_id": ("STRING", {"default": "", "tooltip": _TEAM_TOOLTIP}),
             },
             "optional": dict(_OUTPUT_INPUTS),
@@ -464,7 +471,7 @@ class MerakFetchVideo:
     ):
         job = (video_inference_id or "").strip()
         if not job:
-            raise ValueError("fetch needs a video_inference_id")
+            raise ValueError("fetch needs the video's job_id")
         key, team = _resolve(team_id)
         return _collect(key, team, job, timeout_s, filename_prefix)
 

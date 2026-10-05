@@ -40,6 +40,44 @@ class TaskFor(unittest.TestCase):
             self.assertEqual(merak_api.task_for(inputs), "R2V", role)
 
 
+class ResolveTeam(unittest.TestCase):
+    def test_the_only_active_team_is_selected_for_every_member_role(self):
+        for role in ("OWNER", "ADMIN", "MEMBER"):
+            with self.subTest(role=role), mock.patch.object(
+                merak_api, "_request",
+                return_value={"teams": [{"team_id": "t" * 32, "name": "Video", "role": role}]},
+            ) as requested:
+                self.assertEqual(merak_api.resolve_team_id("key"), "t" * 32)
+                requested.assert_called_once_with("/v1/users/me", "key")
+
+    def test_the_existing_owned_team_default_is_preserved(self):
+        teams = [
+            {"team_id": "a" * 32, "name": "Personal", "role": "OWNER"},
+            {"team_id": "b" * 32, "name": "Shared", "role": "MEMBER"},
+        ]
+        with mock.patch.object(merak_api, "_request", return_value={"teams": teams}):
+            self.assertEqual(merak_api.resolve_team_id("key"), "a" * 32)
+
+    def test_ambiguous_memberships_need_an_explicit_team(self):
+        for role in ("OWNER", "MEMBER"):
+            teams = [
+                {"team_id": "a" * 32, "name": "First", "role": role},
+                {"team_id": "b" * 32, "name": "Second", "role": role},
+            ]
+            with self.subTest(role=role), mock.patch.object(
+                merak_api, "_request", return_value={"teams": teams}
+            ):
+                with self.assertRaisesRegex(merak_api.MerakError, "set team_id") as caught:
+                    merak_api.resolve_team_id("key")
+            self.assertIn("First", str(caught.exception))
+            self.assertIn("Second", str(caught.exception))
+
+    def test_no_membership_reports_an_active_team_is_needed(self):
+        with mock.patch.object(merak_api, "_request", return_value={"teams": []}):
+            with self.assertRaisesRegex(merak_api.MerakError, "active team"):
+                merak_api.resolve_team_id("key")
+
+
 class Submit(unittest.TestCase):
     def test_body_names_the_workload_and_no_steps(self):
         calls = []
@@ -355,3 +393,52 @@ class ReferenceVideoStreams(unittest.TestCase):
         self.assertFalse(ok(1, ["opus"]))
         self.assertFalse(ok(1, ["aac", "aac"]))
         self.assertFalse(ok(2, ["aac"]))
+
+
+class WorkflowCompatibility(unittest.TestCase):
+    def test_the_example_outputs_match_the_node_sockets(self):
+        from pathlib import Path
+
+        workflow = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples" / "merak-video.json").read_text(encoding="utf-8")
+        )
+        node = next(row for row in workflow["nodes"] if row["type"] == "MerakGenerateVideo")
+        expected = list(zip(
+            merak_nodes.MerakGenerateVideo.RETURN_NAMES,
+            merak_nodes.MerakGenerateVideo.RETURN_TYPES,
+        ))
+        self.assertEqual([(row["name"], row["type"]) for row in node["outputs"]], expected)
+        self.assertEqual([row["slot_index"] for row in node["outputs"]], [0, 1])
+
+    def test_saved_widget_and_input_names_remain_compatible(self):
+        schema = merak_nodes.MerakGenerateVideo.INPUT_TYPES()
+        fields = {**schema["required"], **schema["optional"]}
+        sockets = [name for name, (kind, *_) in fields.items() if kind in ("IMAGE", "VIDEO")]
+        widgets = [name for name in fields if name not in sockets]
+        self.assertEqual(sockets, ["first_frame", "last_frame", "reference_images", "reference_video"])
+        self.assertEqual(widgets, [
+            "prompt", "team_id", "clip", "aspect_ratio", "seed", "timeout_s",
+            "filename_prefix", "model",
+        ])
+        fetch = merak_nodes.MerakFetchVideo.INPUT_TYPES()
+        self.assertEqual(list(fetch["required"]), ["video_inference_id", "team_id"])
+        self.assertIn("job_id", fetch["required"]["video_inference_id"][1]["tooltip"])
+
+
+class ProgressDisplay(unittest.TestCase):
+    def test_integer_api_percentages_are_displayed_without_rounding_down(self):
+        progress = merak_nodes._Progress()
+        progress._bar = mock.Mock()
+        for percentage in range(101):
+            with self.subTest(percentage=percentage):
+                progress.update({"state": "RUNNING", "progress_percentage": percentage})
+                progress._bar.update_absolute.assert_called_with(percentage, 100)
+
+    def test_queued_and_missing_progress_leave_the_bar_unchanged(self):
+        progress = merak_nodes._Progress()
+        progress._bar = mock.Mock()
+        progress.update({"state": "QUEUED", "progress_percentage": None})
+        progress.update({"state": "RUNNING", "progress_percentage": None})
+        progress._bar.update_absolute.assert_not_called()
+        progress.finish()
+        progress._bar.update_absolute.assert_called_once_with(100, 100)
