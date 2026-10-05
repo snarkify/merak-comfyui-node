@@ -131,9 +131,8 @@ python main.py
 改 `filename_prefix` 可以换子目录，或加上 `%date:yyyy-MM-dd%` 这样的占位符。
 
 `team_id` 可以填在节点上，或放进 `MERAK_TEAM_ID` —— 在 merak 控制台的网址里能找到它。
-两者都留空时，节点保留原来的默认选择：你唯一拥有的 team；没有拥有的 team 时，
-选择你唯一加入的活跃 team。使用共享 team 或无法唯一选择时，请明确填写 `team_id`。
-OWNER、ADMIN 和 MEMBER 都可以提交任务。
+两者都留空时，节点选择你唯一加入的活跃 team。加入多个 team 时，请填写 `team_id`，
+指定由哪个 team 支付任务费用。
 `MERAK_BASE_URL` 可以把节点指向服务的另一个部署。
 
 把图片接到 `first_frame`、`last_frame`（或两个都接）就变成图生视频。
@@ -150,7 +149,7 @@ OWNER、ADMIN 和 MEMBER 都可以提交任务。
 同时还输出 **video_path**，供需要磁盘文件路径的节点使用。
 
 **Merak Fetch Video (by id)** 用来重新下载一个已经提交过的渲染 —— 如果轮询超时了就用它。
-把视频任务的 `job_id` 填入它的 `video_inference_id` 字段；保留原字段名是为了兼容已保存的工作流。
+把视频任务的 `job_id` 填入它的 `job_id` 字段。
 超时并不会取消服务端的任务。
 
 `examples/merak-video.json` 是一个现成的工作流，所有输入都已接好；不需要的断开即可。拖到画布上就能用。

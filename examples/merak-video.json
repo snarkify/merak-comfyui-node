@@ -121,13 +121,13 @@
       "widgets_values": [
         "The subject of <Picture 1> moves with the motion of <Video 1>, starting from the first frame.",
         "",
+        "H3",
         "480p · 243 frames (~10.1 s)",
         "16:9",
         -1,
         "fixed",
         3600,
-        "video/merak",
-        "H3"
+        "video/merak"
       ]
     },
     {

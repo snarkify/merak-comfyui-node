@@ -50,13 +50,14 @@ class ResolveTeam(unittest.TestCase):
                 self.assertEqual(merak_api.resolve_team_id("key"), "t" * 32)
                 requested.assert_called_once_with("/v1/users/me", "key")
 
-    def test_the_existing_owned_team_default_is_preserved(self):
+    def test_multiple_teams_need_an_explicit_choice_regardless_of_role(self):
         teams = [
             {"team_id": "a" * 32, "name": "Personal", "role": "OWNER"},
             {"team_id": "b" * 32, "name": "Shared", "role": "MEMBER"},
         ]
         with mock.patch.object(merak_api, "_request", return_value={"teams": teams}):
-            self.assertEqual(merak_api.resolve_team_id("key"), "a" * 32)
+            with self.assertRaisesRegex(merak_api.MerakError, "set team_id"):
+                merak_api.resolve_team_id("key")
 
     def test_ambiguous_memberships_need_an_explicit_team(self):
         for role in ("OWNER", "MEMBER"):
@@ -395,7 +396,7 @@ class ReferenceVideoStreams(unittest.TestCase):
         self.assertFalse(ok(2, ["aac"]))
 
 
-class WorkflowCompatibility(unittest.TestCase):
+class NodeInputs(unittest.TestCase):
     def test_the_example_outputs_match_the_node_sockets(self):
         from pathlib import Path
 
@@ -410,19 +411,43 @@ class WorkflowCompatibility(unittest.TestCase):
         self.assertEqual([(row["name"], row["type"]) for row in node["outputs"]], expected)
         self.assertEqual([row["slot_index"] for row in node["outputs"]], [0, 1])
 
-    def test_saved_widget_and_input_names_remain_compatible(self):
+    def test_model_is_grouped_with_clip_and_the_example_uses_that_order(self):
+        from pathlib import Path
+
         schema = merak_nodes.MerakGenerateVideo.INPUT_TYPES()
         fields = {**schema["required"], **schema["optional"]}
         sockets = [name for name, (kind, *_) in fields.items() if kind in ("IMAGE", "VIDEO")]
         widgets = [name for name in fields if name not in sockets]
         self.assertEqual(sockets, ["first_frame", "last_frame", "reference_images", "reference_video"])
         self.assertEqual(widgets, [
-            "prompt", "team_id", "clip", "aspect_ratio", "seed", "timeout_s",
-            "filename_prefix", "model",
+            "prompt", "team_id", "model", "clip", "aspect_ratio", "seed", "timeout_s",
+            "filename_prefix",
         ])
+        workflow = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples" / "merak-video.json").read_text(encoding="utf-8")
+        )
+        node = next(row for row in workflow["nodes"] if row["type"] == "MerakGenerateVideo")
+        values = list(node["widgets_values"])
+        values.remove("fixed")  # ComfyUI adds a control-after-generate widget for the seed.
+        for name, value in zip(widgets, values, strict=True):
+            with self.subTest(widget=name):
+                kind, _options = fields[name]
+                if isinstance(kind, list):
+                    self.assertIn(value, kind)
+                elif kind == "INT":
+                    self.assertIsInstance(value, int)
+                else:
+                    self.assertIsInstance(value, str)
+
+    def test_fetch_takes_job_id_and_passes_it_to_polling(self):
         fetch = merak_nodes.MerakFetchVideo.INPUT_TYPES()
-        self.assertEqual(list(fetch["required"]), ["video_inference_id", "team_id"])
-        self.assertIn("job_id", fetch["required"]["video_inference_id"][1]["tooltip"])
+        self.assertEqual(list(fetch["required"]), ["job_id", "team_id"])
+        with mock.patch.object(merak_nodes, "_resolve", return_value=("key", "team")), \
+             mock.patch.object(merak_nodes, "_collect", return_value={}) as collect:
+            merak_nodes.MerakFetchVideo().fetch(job_id="  job  ", team_id="team")
+        collect.assert_called_once_with(
+            "key", "team", "job", merak_nodes.DEFAULT_TIMEOUT_S, merak_nodes.DEFAULT_FILENAME_PREFIX
+        )
 
 
 class ProgressDisplay(unittest.TestCase):

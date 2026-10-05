@@ -214,18 +214,10 @@ def resolve_api_key() -> str:
 
 
 def resolve_team_id(api_key: str) -> str:
-    """The team this key submits against.
-
-    The team is a path segment, so when it is not supplied it is derived from
-    the account's active memberships. Keep the existing default of its only
-    owned team; otherwise use its only active team. Any member role can submit
-    to an explicit team. An ambiguous choice needs `team_id`, since it pays.
-    """
-    teams = _request("/v1/users/me", api_key).get("teams") or []
-    owned = [team for team in teams if team.get("role") == "OWNER"]
-    candidates = owned or teams
-    if len(candidates) == 1:
-        return candidates[0]["team_id"]
+    """Use the account's only active team, or require an explicit choice."""
+    teams = _request("/v1/users/me", api_key)["teams"]
+    if len(teams) == 1:
+        return teams[0]["team_id"]
     if not teams:
         raise MerakError(
             "this key's account is not a member of an active team — join or create "
@@ -252,10 +244,10 @@ def resolve_workload(api_key: str, team_id: str, model_id: int, resolution: str,
     here rather than as a 422 after the uploads.
     """
     menu = _request(f"/v1/teams/{team_id}/jobs/models", api_key)
-    for model in menu if isinstance(menu, list) else menu.get("items") or []:
-        if model.get("capability_id") != model_id:
+    for model in menu:
+        if model["capability_id"] != model_id:
             continue
-        served = {(clip.get("resolution"), clip.get("frames")) for clip in model.get("clips") or []}
+        served = {(clip["resolution"], clip["frames"]) for clip in model["clips"]}
         if (resolution, frames) not in served:
             raise MerakError(
                 f"{model.get('display_name') or model_id} does not serve {resolution} × "
@@ -300,7 +292,7 @@ def submit(
     inputs: list[dict] | None = None,
     workload_id: str | None = None,
 ) -> dict:
-    """Create one inference; returns its body — 202 with state QUEUED, or 200
+    """Create one video job; returns its body — 202 with state QUEUED, or 200
     with the render already created when a retry replays this submit's key.
 
     `inputs` are media already uploaded by `upload_inputs`; their roles decide
@@ -448,19 +440,19 @@ def upload_inputs(
 def poll(
     api_key: str,
     team_id: str,
-    video_inference_id: str,
+    job_id: str,
     *,
     timeout_s: int = DEFAULT_TIMEOUT_S,
     on_tick=None,
 ) -> dict:
-    """Block until the inference reaches a terminal state, and return it.
+    """Block until the job reaches a terminal state, and return it.
 
     A FAILED POLL IS NOT A FAILED RENDER. The render continues server-side
     whether or not this process can reach the API, so an unreachable API costs a
     tick, not the render. The deadline is the only thing that ends this loop, and
     it covers queue time as well as render time. Timing out cancels nothing.
     """
-    path = f"/v1/teams/{team_id}/jobs/{video_inference_id}"
+    path = f"/v1/teams/{team_id}/jobs/{job_id}"
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -477,13 +469,13 @@ def poll(
         if state in TERMINAL_STATES:
             if state != SUCCESS_STATE:
                 raise MerakError(
-                    f"inference {video_inference_id} {state}: "
+                    f"job {job_id} {state}: "
                     f"{detail.get('error') or 'no reason reported'}"
                 )
             return detail
         if time.monotonic() >= deadline:
             raise MerakError(
-                f"inference {video_inference_id} still {state} after {timeout_s}s "
+                f"job {job_id} still {state} after {timeout_s}s "
                 f"(it is NOT cancelled — re-attach with Merak Fetch Video)"
             )
         time.sleep(POLL_INTERVAL_S)
@@ -494,9 +486,9 @@ def output_url(api_key: str, team_id: str, detail: dict) -> str:
 
     The job lists its outputs; the delivery route signs the VIDEO output.
     """
-    output = next((item for item in detail.get("outputs") or [] if item["role"] == "VIDEO"), None)
+    output = next((item for item in detail["outputs"] if item["role"] == "VIDEO"), None)
     if output is None:
-        raise MerakError(f"inference {detail['job_id']} has no video output")
+        raise MerakError(f"job {detail['job_id']} has no video output")
     path = f"/v1/teams/{team_id}/jobs/{detail['job_id']}/outputs/{output['output_id']}"
     request = urllib.request.Request(
         BASE_URL.rstrip("/") + path,
