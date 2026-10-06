@@ -62,10 +62,21 @@ fi
 
 : >"$ROOT/custom_nodes/merak-comfyui-node/old-version"
 if run_installer "$HOME_DIR" --yes &&
-   [ -f "$ROOT/custom_nodes/merak-comfyui-node.previous/old-version" ]; then
-  pass "an update keeps the previous version"
+   [ -f "$ROOT/custom_nodes/merak-comfyui-node.previous.disabled/old-version" ]; then
+  pass "an update keeps the previous version disabled"
 else
-  fail "an update keeps the previous version"
+  fail "an update keeps the previous version disabled"
+fi
+
+mkdir -p "$ROOT/custom_nodes/merak-comfyui-node.previous"
+: >"$ROOT/custom_nodes/merak-comfyui-node.previous/legacy-backup"
+: >"$ROOT/custom_nodes/merak-comfyui-node/current-version"
+if run_installer "$HOME_DIR" --yes &&
+   [ ! -e "$ROOT/custom_nodes/merak-comfyui-node.previous" ] &&
+   [ -f "$ROOT/custom_nodes/merak-comfyui-node.previous.disabled/current-version" ]; then
+  pass "an update removes the loadable legacy backup"
+else
+  fail "an update removes the loadable legacy backup"
 fi
 
 HOME_DIR="$WORK/multiple-home"

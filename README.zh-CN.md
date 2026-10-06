@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/in
 CMD 只显示 `C:\`。
 
 脚本本身的提示是英文的（这份文档是中文的）。它会打印找到的 ComfyUI 文件夹，并安装到那里。再运行一次就是升级，
-旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
+旧版本会保留在同级目录下的 `merak-comfyui-node.previous.disabled`，ComfyUI 不会加载这个备份。
 
 在 WSL 里，如果 ComfyUI 装在 Windows 上，请使用 Windows 安装脚本；只有 ComfyUI
 本身也装在 WSL 里时，才使用 shell 安装脚本。

@@ -48,7 +48,7 @@ without the `PS` when you're in CMD.
 
 The installer prints the ComfyUI folder it found and installs into it. Running the line
 again upgrades an existing install; the old copy is kept beside it as
-`merak-comfyui-node.previous`.
+`merak-comfyui-node.previous.disabled`, which ComfyUI skips when loading nodes.
 
 In WSL, use the Windows installer for a Windows ComfyUI. Use the shell installer only for
 a ComfyUI installed inside WSL.

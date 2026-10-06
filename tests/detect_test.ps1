@@ -85,6 +85,15 @@ try {
     $keySaved = (Test-Path $keyFile) -and ((Get-Content $keyFile -Raw).Trim() -eq "test-key")
     Check "explicit path installs the node and key" ($result.Code -eq 0 -and $installed -and $keySaved)
 
+    $dest = Join-Path $root "custom_nodes\merak-comfyui-node"
+    Set-Content -LiteralPath (Join-Path $dest "old-version") -Value ""
+    New-Item -ItemType Directory -Path "$dest.previous" | Out-Null
+    Set-Content -LiteralPath (Join-Path "$dest.previous" "legacy-backup") -Value ""
+    $result = Run-Installer $testHome @("-ComfyPath", $root, "-Yes")
+    $backupDisabled = Test-Path (Join-Path "$dest.previous.disabled" "old-version")
+    $legacyRemoved = -not (Test-Path -LiteralPath "$dest.previous")
+    Check "an update disables backups, including legacy backups" ($result.Code -eq 0 -and $backupDisabled -and $legacyRemoved)
+
     $testHome = Join-Path $Work "multiple-home"
     Comfy (Join-Path $testHome "ComfyUI")
     Comfy (Join-Path $testHome "Documents\ComfyUI")
