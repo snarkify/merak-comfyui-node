@@ -3,6 +3,7 @@
 
 import io
 import json
+import ssl
 import unittest
 import urllib.error
 from unittest import mock
@@ -191,6 +192,17 @@ def _fake_open(outcomes):
 
 
 class Retry(unittest.TestCase):
+    def test_a_tls_failure_retries_the_same_submit(self):
+        sent, fake_open = _fake_open([ssl.SSLError("bad record mac"), {"job_id": "j" * 32}])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ):
+            created = merak_api.submit(
+                "key", "team", prompt="p", clip=next(iter(merak_api.CLIPS)), workload_id="w" * 32
+            )
+        self.assertEqual(created["job_id"], "j" * 32)
+        self.assertEqual(sent[0].data, sent[1].data)
+
     def test_a_dropped_submit_is_retried_with_the_same_key(self):
         sent, fake_open = _fake_open([ConnectionResetError("reset"), {"job_id": "j" * 32}])
         with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
@@ -243,6 +255,67 @@ class Retry(unittest.TestCase):
         self.assertEqual([json.loads(request.data) for request in sent[1:]], [
             {"input_ids": ["1" * 32]}, {"input_ids": ["1" * 32]},
         ])
+
+
+class StoragePut(unittest.TestCase):
+    GRANT = {"url": "https://storage/input", "headers": {"If-None-Match": "*"}}
+
+    def test_a_tls_failure_retries_the_same_upload_without_credentials(self):
+        sent, fake_open = _fake_open([ssl.SSLError("bad record mac"), {}])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ):
+            merak_api._put(self.GRANT, b"media")
+        self.assertEqual(len(sent), 2)
+        for request in sent:
+            self.assertEqual(request.full_url, self.GRANT["url"])
+            self.assertEqual(request.data, b"media")
+            self.assertIsNone(request.get_header("X-api-key"))
+            self.assertIsNone(request.get_header("Authorization"))
+
+    def test_a_lost_upload_reply_still_completes_and_verifies_the_input(self):
+        declared = [{"input_id": "1" * 32, "role": "FIRST_FRAME", "position": 0, "upload": self.GRANT}]
+        completed = [{"outcome": "success", "input_id": "1" * 32, "input": {"state": "READY"}}]
+        exists = urllib.error.HTTPError(self.GRANT["url"], 412, "Precondition Failed", {}, None)
+        sent, fake_open = _fake_open([declared, ssl.SSLError("bad record mac"), exists, completed])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ):
+            inputs = merak_api.upload_inputs(
+                "key", "team", [("FIRST_FRAME", 0, b"media", "image/png")],
+                workload_id="w" * 32, model_id=1,
+            )
+        self.assertEqual(inputs[0]["input_id"], "1" * 32)
+        self.assertTrue(sent[-1].full_url.endswith("/jobs/inputs/complete"))
+        self.assertEqual(json.loads(sent[-1].data), {"input_ids": ["1" * 32]})
+
+    def test_precondition_failure_without_a_write_once_grant_is_refused(self):
+        error = urllib.error.HTTPError(self.GRANT["url"], 412, "Precondition Failed", {}, None)
+        with mock.patch.object(merak_api._opener, "open", side_effect=error), \
+             self.assertRaisesRegex(merak_api.MerakError, "HTTP 412"):
+            merak_api._put({"url": self.GRANT["url"]}, b"media")
+
+    def test_storage_server_errors_are_retried_but_forbidden_is_not(self):
+        error = urllib.error.HTTPError(self.GRANT["url"], 503, "Unavailable", {}, None)
+        sent, fake_open = _fake_open([error, {}])
+        with mock.patch.object(merak_api._opener, "open", fake_open), mock.patch.object(
+            merak_api.time, "sleep"
+        ):
+            merak_api._put(self.GRANT, b"media")
+        self.assertEqual(len(sent), 2)
+        forbidden = urllib.error.HTTPError(self.GRANT["url"], 403, "Forbidden", {}, None)
+        with mock.patch.object(merak_api._opener, "open", side_effect=forbidden) as opened, \
+             self.assertRaisesRegex(merak_api.MerakError, "HTTP 403"):
+            merak_api._put(self.GRANT, b"media")
+        self.assertEqual(opened.call_count, 1)
+
+    def test_repeated_tls_failures_stop_after_three_attempts(self):
+        error = ssl.SSLError("bad record mac")
+        with mock.patch.object(merak_api._opener, "open", side_effect=error) as opened, \
+             mock.patch.object(merak_api.time, "sleep"), \
+             self.assertRaisesRegex(merak_api.MerakUnavailable, "upload failed"):
+            merak_api._put(self.GRANT, b"media")
+        self.assertEqual(opened.call_count, 3)
 
 
 class OutputUrl(unittest.TestCase):

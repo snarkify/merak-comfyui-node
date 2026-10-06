@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import json
 import os
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -78,6 +79,7 @@ _TRANSIENT = (
     http.client.RemoteDisconnected,
     ConnectionResetError,
     TimeoutError,
+    ssl.SSLError,
 )
 # Answers that mean "ask again later". A poll runs for as long as a render does,
 # so one of these must not end a render that is still going.
@@ -351,14 +353,30 @@ def _put(grant: dict, data: bytes) -> None:
         method="PUT",
         headers={**(grant.get("headers") or {}), "User-Agent": _USER_AGENT},
     )
-    try:
-        with _opener.open(request, timeout=UPLOAD_TIMEOUT_S):
-            pass
-    except urllib.error.HTTPError as exc:
-        # Storage answering, not merak: there is no error envelope to read.
-        raise MerakError(f"the upload was refused by storage: HTTP {exc.code}") from None
-    except _TRANSIENT as exc:
-        raise MerakUnavailable(f"the upload failed ({type(exc).__name__}): {exc}") from None
+    attempt = 0
+    while True:
+        try:
+            with _opener.open(request, timeout=UPLOAD_TIMEOUT_S):
+                return
+        except urllib.error.HTTPError as exc:
+            # A lost reply can leave a write-once object in place. Completion
+            # still verifies its length and MD5 before it can be submitted.
+            if exc.code == 412 and request.get_header("If-none-match") == "*":
+                return
+            retryable = exc.code >= 500 or exc.code in _RETRYABLE_STATUSES
+            if retryable and attempt < 2:
+                attempt += 1
+                time.sleep(_retry_delay(exc, attempt))
+                continue
+            # Storage answering, not merak: there is no error envelope to read.
+            kind = MerakUnavailable if retryable else MerakError
+            raise kind(f"the upload was refused by storage: HTTP {exc.code}") from None
+        except _TRANSIENT as exc:
+            if attempt < 2:
+                attempt += 1
+                time.sleep(2 * attempt)
+                continue
+            raise MerakUnavailable(f"the upload failed ({type(exc).__name__}): {exc}") from None
 
 
 def upload_inputs(
