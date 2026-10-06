@@ -176,6 +176,9 @@ what you don't need. Drag it onto the canvas.
 | Reference video | one, 2–15 s, 256–5760 px a side, aspect 0.4–2.5, 23.976–60 fps, ≤50 MB; H.264 or H.265, AAC or MP3 sound kept |
 | Models | `H3`, `H3 Fast`, `H3 Draft` |
 
+Canvas dimensions follow H3's native grid. At `16:9`, the 480p tier produces
+832×480, and the 720p tier produces 1344×768.
+
 The 22-frame clip is off-spec — H3 is specified for 5–15 s — and is not the default.
 
 Set a seed to make a render repeatable; at `-1` the server picks one and does not report
