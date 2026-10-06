@@ -145,7 +145,13 @@ SOURCE="$WORK/$NODE_NAME-$BRANCH"
 [ -f "$SOURCE/merak_nodes.py" ] || fail "The downloaded archive is incomplete."
 
 DEST="$CUSTOM_NODES/$NODE_NAME"
-BACKUP="$CUSTOM_NODES/$NODE_NAME.previous"
+LEGACY_BACKUP="$DEST.previous"
+# ComfyUI imports every custom_nodes directory except those ending in .disabled.
+BACKUP="$LEGACY_BACKUP.disabled"
+if [ -e "$LEGACY_BACKUP" ]; then
+  rm -rf "$BACKUP"
+  mv "$LEGACY_BACKUP" "$BACKUP"
+fi
 if [ -e "$DEST" ]; then
   rm -rf "$BACKUP"
   mv "$DEST" "$BACKUP"

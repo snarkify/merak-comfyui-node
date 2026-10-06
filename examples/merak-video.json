@@ -103,10 +103,16 @@
       ],
       "outputs": [
         {
+          "name": "video",
+          "type": "VIDEO",
+          "links": null,
+          "slot_index": 0
+        },
+        {
           "name": "video_path",
           "type": "STRING",
           "links": null,
-          "slot_index": 0
+          "slot_index": 1
         }
       ],
       "properties": {
@@ -115,13 +121,13 @@
       "widgets_values": [
         "The subject of <Picture 1> moves with the motion of <Video 1>, starting from the first frame.",
         "",
+        "H3",
         "480p · 243 frames (~10.1 s)",
         "16:9",
         -1,
         "fixed",
         3600,
-        "video/merak",
-        "H3"
+        "video/merak"
       ]
     },
     {

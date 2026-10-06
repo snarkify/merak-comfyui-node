@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/snarkify/merak-comfyui-node/main/in
 CMD 只显示 `C:\`。
 
 脚本本身的提示是英文的（这份文档是中文的）。它会打印找到的 ComfyUI 文件夹，并安装到那里。再运行一次就是升级，
-旧版本会保留在同级目录下的 `merak-comfyui-node.previous`。
+旧版本会保留在同级目录下的 `merak-comfyui-node.previous.disabled`，ComfyUI 不会加载这个备份。
 
 在 WSL 里，如果 ComfyUI 装在 Windows 上，请使用 Windows 安装脚本；只有 ComfyUI
 本身也装在 WSL 里时，才使用 shell 安装脚本。
@@ -131,6 +131,8 @@ python main.py
 改 `filename_prefix` 可以换子目录，或加上 `%date:yyyy-MM-dd%` 这样的占位符。
 
 `team_id` 可以填在节点上，或放进 `MERAK_TEAM_ID` —— 在 merak 控制台的网址里能找到它。
+两者都留空时，节点选择你唯一加入的活跃 team。加入多个 team 时，请填写 `team_id`，
+指定由哪个 team 支付任务费用。
 `MERAK_BASE_URL` 可以把节点指向服务的另一个部署。
 
 把图片接到 `first_frame`、`last_frame`（或两个都接）就变成图生视频。
@@ -147,6 +149,7 @@ python main.py
 同时还输出 **video_path**，供需要磁盘文件路径的节点使用。
 
 **Merak Fetch Video (by id)** 用来重新下载一个已经提交过的渲染 —— 如果轮询超时了就用它。
+把视频任务的 `job_id` 填入它的 `job_id` 字段。
 超时并不会取消服务端的任务。
 
 `examples/merak-video.json` 是一个现成的工作流，所有输入都已接好；不需要的断开即可。拖到画布上就能用。
@@ -163,6 +166,9 @@ python main.py
 | 参考视频 | 一段，2–15 秒，边长 256–5760 px，比例 0.4–2.5，23.976–60 fps，≤50 MB；H.264 或 H.265，保留 AAC/MP3 音轨 |
 | 模型 | `H3`、`H3 Fast`、`H3 Draft` |
 
+画布尺寸按 H3 的原生网格对齐。选择 `16:9` 时，480p 档输出 832×480，
+720p 档输出 1344×768。
+
 22 帧那档超出了规格（H3 的设计区间是 5–15 秒），因此不是默认值。
 
 设定 seed 可以让渲染可复现；填 `-1` 时由服务端随机选择并且不会告诉你用了哪个（`0` 是一个真实的 seed）。
@@ -175,7 +181,7 @@ python main.py
 | 装到了错误的那个 ComfyUI | 用 `--path` / `-ComfyPath` 指定，节点会装到你指定的位置 |
 | 重启后搜不到 **Merak** 节点 | 确认节点在 `ComfyUI/custom_nodes/merak-comfyui-node` 下，并查看 ComfyUI 控制台里的报错 |
 | `403 INFERENCE_NOT_ENABLED` | 你的账号没有开通推理权限 |
-| `403` / `404` 且提到 team | 你必须是该 team 的**所有者**，仅是成员不够 |
+| `403` / `404` 且提到 team | 检查 `team_id`，以及你是否仍是该 team 的活跃成员 |
 | `401` | key 缺失或已被吊销 —— 检查 `~/.merak/api_key` 里只有 key 本身 |
 | 渲染 `FAILED` 且提示 `input image …` | 关键帧超出尺寸或比例限制 —— 不计费 |
 | 轮询超时 | 渲染**没有**被取消 —— 用 *Merak Fetch Video* 重新取回 |

@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import json
 import os
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -15,7 +16,7 @@ import uuid
 from pathlib import PurePosixPath
 
 # Reported in the User-Agent on every request.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # Override with MERAK_BASE_URL to point the node at another deployment.
 BASE_URL = os.environ.get("MERAK_BASE_URL", "").strip() or "https://api.merakcompute.ai"
@@ -78,6 +79,7 @@ _TRANSIENT = (
     http.client.RemoteDisconnected,
     ConnectionResetError,
     TimeoutError,
+    ssl.SSLError,
 )
 # Answers that mean "ask again later". A poll runs for as long as a render does,
 # so one of these must not end a render that is still going.
@@ -158,7 +160,7 @@ def _request(
     timeout: int = 30,
     retries: int = 2,
     idempotent: bool = False,
-) -> dict:
+) -> dict | list:
     """One API call, returning parsed JSON.
 
     Retries are for GETs, and for a POST the caller marks `idempotent`: a submit
@@ -214,33 +216,17 @@ def resolve_api_key() -> str:
 
 
 def resolve_team_id(api_key: str) -> str:
-    """The team this key submits against.
-
-    The team is a path segment, so when it is not supplied it is derived from the
-    key: the one team the account owns. Ownership is the access rule, and
-    ambiguity is reported rather than guessed, since a render is billed to the
-    team that ran it.
-    """
-    try:
-        teams = _request("/v1/users/me", api_key).get("teams") or []
-    except MerakError as failure:
-        if "KEY_SCOPE_FORBIDDEN" in str(failure):
-            raise MerakError(
-                "this key is scoped to inference only, so it cannot look up which team "
-                "it belongs to — set team_id on the node (find it in the merak console "
-                "URL, or on the team page)"
-            ) from None
-        raise
-    owned = [team for team in teams if team.get("role") == "OWNER"]
-    if len(owned) == 1:
-        return owned[0]["team_id"]
-    if not owned:
+    """Use the account's only active team, or require an explicit choice."""
+    teams = _request("/v1/users/me", api_key)["teams"]
+    if len(teams) == 1:
+        return teams[0]["team_id"]
+    if not teams:
         raise MerakError(
-            "this key's account owns no team — inference requires you to OWN the team "
-            "(being a member of someone else's is not enough)"
+            "this key's account is not a member of an active team — join or create "
+            "a team before submitting video jobs"
         )
-    listed = ", ".join(f"{team['team_id']} ({team['name']})" for team in owned)
-    raise MerakError(f"this account owns several teams — set team_id to one of: {listed}")
+    listed = ", ".join(f"{team['team_id']} ({team['name']})" for team in teams)
+    raise MerakError(f"this account belongs to several teams — set team_id to one of: {listed}")
 
 
 def task_for(inputs: list[dict]) -> str:
@@ -259,11 +245,11 @@ def resolve_workload(api_key: str, team_id: str, model_id: int, resolution: str,
     model serves the requested clip, so a clip it does not serve is refused
     here rather than as a 422 after the uploads.
     """
-    menu = _request(f"/v1/teams/{team_id}/video_inferences/models", api_key)
-    for model in menu if isinstance(menu, list) else menu.get("items") or []:
-        if model.get("model_id") != model_id:
+    menu = _request(f"/v1/teams/{team_id}/jobs/models", api_key)
+    for model in menu:
+        if model["capability_id"] != model_id:
             continue
-        served = {(clip.get("resolution"), clip.get("frames")) for clip in model.get("clips") or []}
+        served = {(clip["resolution"], clip["frames"]) for clip in model["clips"]}
         if (resolution, frames) not in served:
             raise MerakError(
                 f"{model.get('display_name') or model_id} does not serve {resolution} × "
@@ -308,12 +294,14 @@ def submit(
     inputs: list[dict] | None = None,
     workload_id: str | None = None,
 ) -> dict:
-    """Create one inference; returns its body — 202 with state QUEUED, or 200
+    """Create one video job; returns its body — 202 with state QUEUED, or 200
     with the render already created when a retry replays this submit's key.
 
     `inputs` are media already uploaded by `upload_inputs`; their roles decide
-    the task (see `task_for`). Pass the `workload_id` from `resolve_workload`
-    when it was resolved before the uploads; otherwise it is resolved here.
+    the task (see `task_for`), and the request names them by id, since each
+    was declared with its role and position. Pass the `workload_id` from
+    `resolve_workload` when it was resolved before the uploads; otherwise it is
+    resolved here.
     """
     prompt = check_request(prompt, clip, model, aspect_ratio)
     resolution, frames = CLIPS[clip]
@@ -321,40 +309,32 @@ def submit(
     model_id = MODELS[model]
     if workload_id is None:
         workload_id = resolve_workload(api_key, team_id, model_id, resolution, frames)
-    body: dict = {
-        "workload_id": workload_id,
-        "model_id": model_id,
+    request = {
         "task": task_for(inputs),
         "prompt": prompt,
         "frames": frames,
         "resolution": resolution,
         "aspect_ratio": ASPECT_RATIOS[aspect_ratio],
-        "inputs": inputs,
+    }
+    body: dict = {
+        "job_type": "VIDEO",
+        "workload_id": workload_id,
+        "capability_id": model_id,
+        "inputs": [item["input_id"] for item in inputs],
+        "request": request,
         # One per submit, so a retry of this request replays the render it
         # created instead of creating a second one.
         "idempotency_key": uuid.uuid4().hex,
     }
     # -1 means the server picks. 0 is a real seed.
     if seed >= 0:
-        body["seed"] = seed
+        request["seed"] = seed
     return _request(
-        f"/v1/teams/{team_id}/video_inferences", api_key, method="POST", body=body, idempotent=True
+        f"/v1/teams/{team_id}/jobs", api_key, method="POST", body=body, idempotent=True
     )
 
 
-def upload_input(api_key: str, team_id: str, data: bytes, content_type: str) -> str:
-    """Put one image or video where the renderer can fetch it; returns its `input_id`.
-
-    Three legs, and only the ones that talk to merak carry the API key:
-
-    1. DECLARE (authenticated) — type, length and MD5, for which the API signs a
-       write-once PUT.
-    2. PUT (NO credential) — the bytes go to object storage under that signature,
-       with exactly the headers the grant names. They are part of the signature,
-       and the storage host is a third party to your credential.
-    3. COMPLETE (authenticated) — the server checks the stored object against the
-       declaration. Only a READY input can be named in a submit.
-    """
+def _check_size(data: bytes, content_type: str) -> None:
     if not data:
         raise MerakError("the input is empty")
     limit = MAX_VIDEO_BYTES if content_type.startswith("video/") else MAX_IMAGE_BYTES
@@ -365,69 +345,132 @@ def upload_input(api_key: str, team_id: str, data: bytes, content_type: str) -> 
             "nothing was sent."
         )
 
-    path = f"/v1/teams/{team_id}/video_inferences/inputs"
-    declared = _request(
-        path,
-        api_key,
-        method="POST",
-        body={
-            "content_type": content_type,
-            "content_length": len(data),
-            # An integrity checksum, not a security primitive — spelled out so
-            # this still works on a FIPS build, where a bare md5() raises.
-            "md5": hashlib.md5(data, usedforsecurity=False).hexdigest(),
-        },
-    )
-    grant = declared["upload"]
+
+def _put(grant: dict, data: bytes) -> None:
     request = urllib.request.Request(
         grant["url"],
         data=data,
         method="PUT",
         headers={**(grant.get("headers") or {}), "User-Agent": _USER_AGENT},
     )
-    try:
-        with _opener.open(request, timeout=UPLOAD_TIMEOUT_S):
-            pass
-    except urllib.error.HTTPError as exc:
-        # Storage answering, not merak: there is no error envelope to read.
-        raise MerakError(f"the upload was refused by storage: HTTP {exc.code}") from None
-    except _TRANSIENT as exc:
-        raise MerakUnavailable(f"the upload failed ({type(exc).__name__}): {exc}") from None
+    attempt = 0
+    while True:
+        try:
+            with _opener.open(request, timeout=UPLOAD_TIMEOUT_S):
+                return
+        except urllib.error.HTTPError as exc:
+            # A lost reply can leave a write-once object in place. Completion
+            # still verifies its length and MD5 before it can be submitted.
+            if exc.code == 412 and request.get_header("If-none-match") == "*":
+                return
+            retryable = exc.code >= 500 or exc.code in _RETRYABLE_STATUSES
+            if retryable and attempt < 2:
+                attempt += 1
+                time.sleep(_retry_delay(exc, attempt))
+                continue
+            # Storage answering, not merak: there is no error envelope to read.
+            kind = MerakUnavailable if retryable else MerakError
+            raise kind(f"the upload was refused by storage: HTTP {exc.code}") from None
+        except _TRANSIENT as exc:
+            if attempt < 2:
+                attempt += 1
+                time.sleep(2 * attempt)
+                continue
+            raise MerakUnavailable(f"the upload failed ({type(exc).__name__}): {exc}") from None
 
-    completed = _request(f"{path}/{declared['input_id']}/complete", api_key, method="POST")
-    if completed.get("state") != "READY":
-        raise MerakError(f"input {declared['input_id']} is {completed.get('state')}, not READY")
-    return declared["input_id"]
 
+def upload_inputs(
+    api_key: str, team_id: str, media, *, workload_id: str, model_id: int
+) -> list[dict]:
+    """Put every image and video where the renderer can fetch them; returns the
+    `inputs` list `submit` takes. `media` is `(role, position, bytes,
+    content_type)` tuples. Uploads happen before the submit, so a bad file is
+    refused before anything is queued or billed.
 
-def upload_inputs(api_key: str, team_id: str, media) -> list[dict]:
-    """`media` is `(role, position, bytes, content_type)` tuples; returns the
-    `inputs` list `submit` takes. Uploads happen before the submit, so a bad
-    file is refused before anything is queued or billed."""
+    Three legs, and only the ones that talk to merak carry the API key:
+
+    1. DECLARE (authenticated) — every file's role, position, type, length and
+       MD5 in one request, for which the API signs one write-once PUT each.
+    2. PUT (NO credential) — each file goes to object storage under its
+       signature, with exactly the headers its grant names. They are part of the
+       signature, and the storage host is a third party to your credential.
+    3. COMPLETE (authenticated) — the server checks each stored object against
+       its declaration. Only a READY input can be named in a submit.
+    """
+    if not media:
+        return []
+    for _, _, data, content_type in media:
+        _check_size(data, content_type)
+
+    path = f"/v1/teams/{team_id}/jobs/inputs"
+    declared = _request(
+        path,
+        api_key,
+        method="POST",
+        body={
+            "workload_id": workload_id,
+            "capability_id": model_id,
+            "inputs": [
+                {
+                    "role": role,
+                    "idempotency_key": uuid.uuid4().hex,
+                    "position": position,
+                    "content_type": content_type,
+                    "content_length": len(data),
+                    # An integrity checksum, not a security primitive — spelled out so
+                    # this still works on a FIPS build, where a bare md5() raises.
+                    "md5": hashlib.md5(data, usedforsecurity=False).hexdigest(),
+                }
+                for role, position, data, content_type in media
+            ],
+        },
+        idempotent=True,
+    )
+    declarations = {(row["role"], row["position"]): row for row in declared}
     inputs = []
-    for role, position, data, content_type in media:
-        input_id = upload_input(api_key, team_id, data, content_type)
-        print(f"[merak] {role.lower()} {position} uploaded as input {input_id}")
-        inputs.append({"role": role, "input_id": input_id, "position": position})
+    for role, position, data, _ in media:
+        row = declarations[(role, position)]
+        _put(row["upload"], data)
+        inputs.append({"role": role, "input_id": row["input_id"], "position": position})
+    completed = _request(
+        f"{path}/complete",
+        api_key,
+        method="POST",
+        body={"input_ids": [item["input_id"] for item in inputs]},
+        # READY inputs succeed again, so a lost reply can replay these same IDs.
+        idempotent=True,
+    )
+    results = {result["input_id"]: result for result in completed}
+    for row in inputs:
+        result = results[row["input_id"]]
+        if result["outcome"] == "failure":
+            raise MerakError(
+                f"input {result['input_id']}: HTTP {result['status_code']} "
+                f"{result['code']}: {result['message']}"
+            )
+        state = result["input"]["state"]
+        if state != "READY":
+            raise MerakError(f"input {row['input_id']} is {state}, not READY")
+        print(f"[merak] {row['role'].lower()} {row['position']} uploaded as input {row['input_id']}")
     return inputs
 
 
 def poll(
     api_key: str,
     team_id: str,
-    video_inference_id: str,
+    job_id: str,
     *,
     timeout_s: int = DEFAULT_TIMEOUT_S,
     on_tick=None,
 ) -> dict:
-    """Block until the inference reaches a terminal state, and return it.
+    """Block until the job reaches a terminal state, and return it.
 
     A FAILED POLL IS NOT A FAILED RENDER. The render continues server-side
     whether or not this process can reach the API, so an unreachable API costs a
     tick, not the render. The deadline is the only thing that ends this loop, and
     it covers queue time as well as render time. Timing out cancels nothing.
     """
-    path = f"/v1/teams/{team_id}/video_inferences/{video_inference_id}"
+    path = f"/v1/teams/{team_id}/jobs/{job_id}"
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -444,13 +487,13 @@ def poll(
         if state in TERMINAL_STATES:
             if state != SUCCESS_STATE:
                 raise MerakError(
-                    f"inference {video_inference_id} {state}: "
+                    f"job {job_id} {state}: "
                     f"{detail.get('error') or 'no reason reported'}"
                 )
             return detail
         if time.monotonic() >= deadline:
             raise MerakError(
-                f"inference {video_inference_id} still {state} after {timeout_s}s "
+                f"job {job_id} still {state} after {timeout_s}s "
                 f"(it is NOT cancelled — re-attach with Merak Fetch Video)"
             )
         time.sleep(POLL_INTERVAL_S)
@@ -459,13 +502,12 @@ def poll(
 def output_url(api_key: str, team_id: str, detail: dict) -> str:
     """The presigned link to the rendered video.
 
-    A SUCCEEDED inference normally carries `output_url` already; the delivery
-    route below covers one that arrives without it.
+    The job lists its outputs; the delivery route signs the VIDEO output.
     """
-    url = detail.get("output_url")
-    if url:
-        return url
-    path = f"/v1/teams/{team_id}/video_inferences/{detail['job_id']}/output"
+    output = next((item for item in detail["outputs"] if item["role"] == "VIDEO"), None)
+    if output is None:
+        raise MerakError(f"job {detail['job_id']} has no video output")
+    path = f"/v1/teams/{team_id}/jobs/{detail['job_id']}/outputs/{output['output_id']}"
     request = urllib.request.Request(
         BASE_URL.rstrip("/") + path,
         headers={"X-Api-Key": api_key, "User-Agent": _USER_AGENT},

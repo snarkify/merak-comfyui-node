@@ -48,7 +48,7 @@ without the `PS` when you're in CMD.
 
 The installer prints the ComfyUI folder it found and installs into it. Running the line
 again upgrades an existing install; the old copy is kept beside it as
-`merak-comfyui-node.previous`.
+`merak-comfyui-node.previous.disabled`, which ComfyUI skips when loading nodes.
 
 In WSL, use the Windows installer for a Windows ComfyUI. Use the shell installer only for
 a ComfyUI installed inside WSL.
@@ -137,6 +137,8 @@ lands in your output folder as `video/merak_00001_.mp4` and previews in place. C
 `filename_prefix` to pick a different subfolder or add `%date:yyyy-MM-dd%` tokens.
 
 `team_id` goes on the node, or in `MERAK_TEAM_ID` — find it in the merak console URL.
+If both are blank, the node selects your only active team. If you belong to multiple
+teams, set `team_id` to choose which one pays for the job.
 `MERAK_BASE_URL` points the node at another deployment of the service.
 
 Connect an image to `first_frame`, `last_frame`, or both to make it image-to-video.
@@ -157,6 +159,7 @@ Video Components, and as **video_path** for anything that wants the file on disk
 
 **Merak Fetch Video (by id)** re-downloads a render you already submitted — use it if a
 queue polls past its timeout. The timeout cancels nothing server-side.
+Paste the video's `job_id` into its `job_id` field.
 
 `examples/merak-video.json` is a ready-made graph with every input wired; disconnect
 what you don't need. Drag it onto the canvas.
@@ -173,6 +176,9 @@ what you don't need. Drag it onto the canvas.
 | Reference video | one, 2–15 s, 256–5760 px a side, aspect 0.4–2.5, 23.976–60 fps, ≤50 MB; H.264 or H.265, AAC or MP3 sound kept |
 | Models | `H3`, `H3 Fast`, `H3 Draft` |
 
+Canvas dimensions follow H3's native grid. At `16:9`, the 480p tier produces
+832×480, and the 720p tier produces 1344×768.
+
 The 22-frame clip is off-spec — H3 is specified for 5–15 s — and is not the default.
 
 Set a seed to make a render repeatable; at `-1` the server picks one and does not report
@@ -186,7 +192,7 @@ it back (`0` is a real seed).
 | It picked the wrong ComfyUI | pass `--path` / `-ComfyPath`; the node goes wherever you point it |
 | No **Merak** nodes after restarting | check the node landed in `ComfyUI/custom_nodes/merak-comfyui-node`, and look at the ComfyUI console for the error |
 | `403 INFERENCE_NOT_ENABLED` | inference is not enabled for your account |
-| `403` / `404` naming the team | you must **own** the team; membership is not enough |
+| `403` / `404` naming the team | check `team_id` and your active membership in that team |
 | `401` | key missing or revoked — check `~/.merak/api_key` holds the key and nothing else |
 | Render `FAILED` with `input image …` | keyframe outside the size or aspect limits — no charge |
 | Poll times out | the render is **not** cancelled — re-attach with *Merak Fetch Video* |

@@ -122,7 +122,9 @@ else {
 
 $CustomNodes = [IO.Path]::Combine($Target, "custom_nodes")
 $Dest = [IO.Path]::Combine($CustomNodes, $NodeName)
-$Backup = "$Dest.previous"
+$LegacyBackup = "$Dest.previous"
+# ComfyUI skips custom_nodes directories ending in .disabled.
+$Backup = "$LegacyBackup.disabled"
 $Work = [IO.Path]::Combine([IO.Path]::GetTempPath(), "merak-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Work | Out-Null
 
@@ -143,6 +145,10 @@ try {
     }
 
     $madeBackup = $false
+    if (Test-Path -LiteralPath $LegacyBackup) {
+        if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
+        Move-Item -LiteralPath $LegacyBackup -Destination $Backup
+    }
     if (Test-Path -LiteralPath $Dest) {
         if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }
         Move-Item -LiteralPath $Dest -Destination $Backup

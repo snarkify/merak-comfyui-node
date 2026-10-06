@@ -40,7 +40,10 @@ ACCEPTED_AUDIO_CODECS = ("aac", "mp3")
 # takes the next counter in that folder.
 DEFAULT_FILENAME_PREFIX = "video/merak"
 
-_TEAM_TOOLTIP = "Your merak team id, from the console URL. Blank falls back to MERAK_TEAM_ID."
+_TEAM_TOOLTIP = (
+    "Your merak team id, from the console URL. Blank uses MERAK_TEAM_ID, then "
+    "your only active team. Choose explicitly if you belong to multiple teams."
+)
 # Both nodes save the same way, so they offer the same two controls.
 _OUTPUT_INPUTS = {
     "timeout_s": ("INT", {"default": DEFAULT_TIMEOUT_S, "min": 60, "max": 21600}),
@@ -221,16 +224,16 @@ class _Progress:
             return
         if percentage is None:
             return
-        self._set(max(0.0, min(float(percentage) / 100.0, 1.0)))
+        self._set(max(0, min(percentage, self.TOTAL)))
 
     def finish(self) -> None:
-        self._set(1.0)
+        self._set(self.TOTAL)
 
-    def _set(self, fraction: float) -> None:
+    def _set(self, percentage: int) -> None:
         if self._bar is None:
             return
         try:
-            self._bar.update_absolute(int(fraction * self.TOTAL), self.TOTAL)
+            self._bar.update_absolute(percentage, self.TOTAL)
         except Exception:
             # Reporting progress must never be able to fail a paid render.
             self._bar = None
@@ -321,6 +324,10 @@ class MerakGenerateVideo:
                     {"multiline": True, "default": "a paper boat floating on a calm pond"},
                 ),
                 "team_id": ("STRING", {"default": "", "tooltip": _TEAM_TOOLTIP}),
+                "model": (
+                    list(MODELS),
+                    {"default": DEFAULT_MODEL, "tooltip": "Fast and Draft trade quality for speed"},
+                ),
                 "clip": (list(CLIPS), {"default": next(iter(CLIPS))}),
             },
             "optional": {
@@ -360,13 +367,6 @@ class MerakGenerateVideo:
                     },
                 ),
                 **_OUTPUT_INPUTS,
-                # Appended LAST on purpose: ComfyUI stores widget values by
-                # position, so a widget added anywhere else would shift every
-                # value in every saved workflow.
-                "model": (
-                    list(MODELS),
-                    {"default": DEFAULT_MODEL, "tooltip": "Fast and Draft trade quality for speed"},
-                ),
             },
         }
 
@@ -374,6 +374,7 @@ class MerakGenerateVideo:
         self,
         prompt,
         team_id,
+        model,
         clip,
         first_frame=None,
         last_frame=None,
@@ -383,7 +384,6 @@ class MerakGenerateVideo:
         seed=-1,
         timeout_s=DEFAULT_TIMEOUT_S,
         filename_prefix=DEFAULT_FILENAME_PREFIX,
-        model=DEFAULT_MODEL,
     ):
         key, team = _resolve(team_id)
         # The request's own fields and the model menu are checked BEFORE any
@@ -407,7 +407,7 @@ class MerakGenerateVideo:
             media.append(
                 (REFERENCE_VIDEO_ROLE, 0, encode_reference_video(reference_video), VIDEO_CONTENT_TYPE)
             )
-        inputs = upload_inputs(key, team, media)
+        inputs = upload_inputs(key, team, media, workload_id=workload_id, model_id=MODELS[model])
         job = submit(
             key,
             team,
@@ -419,7 +419,7 @@ class MerakGenerateVideo:
             inputs=inputs,
             workload_id=workload_id,
         )["job_id"]
-        print(f"[merak] inference {job} submitted; polling…")
+        print(f"[merak] job_id {job} submitted; polling…")
 
         bar = _Progress()
 
@@ -436,7 +436,7 @@ class MerakGenerateVideo:
 
 @_never_cache
 class MerakFetchVideo:
-    """Fetch an existing inference by id, waiting if it is still running. Use it
+    """Fetch an existing video job by id, waiting if it is still running. Use it
     when a queue polls past its timeout — the timeout cancels nothing."""
 
     CATEGORY = "video/merak"
@@ -449,7 +449,10 @@ class MerakFetchVideo:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video_inference_id": ("STRING", {"default": ""}),
+                "job_id": (
+                    "STRING",
+                    {"default": "", "tooltip": "The video's job_id, from the console or submit log."},
+                ),
                 "team_id": ("STRING", {"default": "", "tooltip": _TEAM_TOOLTIP}),
             },
             "optional": dict(_OUTPUT_INPUTS),
@@ -457,14 +460,14 @@ class MerakFetchVideo:
 
     def fetch(
         self,
-        video_inference_id,
+        job_id,
         team_id,
         timeout_s=DEFAULT_TIMEOUT_S,
         filename_prefix=DEFAULT_FILENAME_PREFIX,
     ):
-        job = (video_inference_id or "").strip()
+        job = (job_id or "").strip()
         if not job:
-            raise ValueError("fetch needs a video_inference_id")
+            raise ValueError("fetch needs the video's job_id")
         key, team = _resolve(team_id)
         return _collect(key, team, job, timeout_s, filename_prefix)
 
